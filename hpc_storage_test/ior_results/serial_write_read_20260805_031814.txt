@@ -1,0 +1,1 @@
+storage_test.sh: line 103: /root/hpcbench/hpc_benchmark/hpc_storage_test/ior/bin/ior: Permission denied

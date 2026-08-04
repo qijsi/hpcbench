@@ -1,0 +1,40 @@
+IOR-3.2.2: MPI Coordinated Test of Parallel I/O
+Began               : Wed Aug  5 03:44:07 2026
+Command line        : ior -a POSIX -t 4m -b 64m -s 8 -F -o testfile_parallel_independent_w -w -r
+Machine             : Linux m03r3n09
+TestID              : 0
+StartTime           : Wed Aug  5 03:44:07 2026
+Path                : /root/hpcbench/hpc_benchmark/hpc_storage_test
+FS                  : 436.1 GiB   Used FS: 13.6%   Inodes: 27.8 Mi   Used Inodes: 1.7%
+
+Options: 
+api                 : POSIX
+apiVersion          : 
+test filename       : testfile_parallel_independent_w
+access              : file-per-process
+type                : independent
+segments            : 8
+ordering in a file  : sequential
+ordering inter file : no tasks offsets
+tasks               : 128
+clients per node    : 128
+repetitions         : 1
+xfersize            : 4 MiB
+blocksize           : 64 MiB
+aggregate filesize  : 64 GiB
+
+Results: 
+
+access    bw(MiB/s)  block(KiB) xfer(KiB)  open(s)    wr/rd(s)   close(s)   total(s)   iter
+------    ---------  ---------- ---------  --------   --------   --------   --------   ----
+write     73323      65536      4096       0.004282   0.893712   0.116797   0.893804   0   
+read      142746     65536      4096       0.000212   0.459095   0.035970   0.459110   0   
+remove    -          -          -          -          -          -          0.858222   0   
+Max Write: 73322.53 MiB/sec (76884.24 MB/sec)
+Max Read:  142745.75 MiB/sec (149679.76 MB/sec)
+
+Summary of all tests:
+Operation   Max(MiB)   Min(MiB)  Mean(MiB)     StdDev   Max(OPs)   Min(OPs)  Mean(OPs)     StdDev    Mean(s) Test# #Tasks tPN reps fPP reord reordoff reordrand seed segcnt   blksiz    xsize aggs(MiB)   API RefNum
+write       73322.53   73322.53   73322.53       0.00   18330.63   18330.63   18330.63       0.00    0.89380     0    128 128    1   1     0        1         0    0      8 67108864  4194304   65536.0 POSIX      0
+read       142745.75  142745.75  142745.75       0.00   35686.44   35686.44   35686.44       0.00    0.45911     0    128 128    1   1     0        1         0    0      8 67108864  4194304   65536.0 POSIX      0
+Finished            : Wed Aug  5 03:44:10 2026

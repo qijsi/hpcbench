@@ -1,0 +1,40 @@
+IOR-3.2.2: MPI Coordinated Test of Parallel I/O
+Began               : Wed Aug  5 03:41:02 2026
+Command line        : ior -a POSIX -t 4m -b 64m -s 8 -F -o testfile_serial_w -w -r
+Machine             : Linux m03r3n09
+TestID              : 0
+StartTime           : Wed Aug  5 03:41:02 2026
+Path                : /root/hpcbench/hpc_benchmark/hpc_storage_test
+FS                  : 436.1 GiB   Used FS: 13.6%   Inodes: 27.8 Mi   Used Inodes: 1.7%
+
+Options: 
+api                 : POSIX
+apiVersion          : 
+test filename       : testfile_serial_w
+access              : file-per-process
+type                : independent
+segments            : 8
+ordering in a file  : sequential
+ordering inter file : no tasks offsets
+tasks               : 1
+clients per node    : 1
+repetitions         : 1
+xfersize            : 4 MiB
+blocksize           : 64 MiB
+aggregate filesize  : 512 MiB
+
+Results: 
+
+access    bw(MiB/s)  block(KiB) xfer(KiB)  open(s)    wr/rd(s)   close(s)   total(s)   iter
+------    ---------  ---------- ---------  --------   --------   --------   --------   ----
+write     2255.48    65536      4096       0.000047   0.226941   0.000014   0.227002   0   
+read      8177       65536      4096       0.000011   0.062600   0.000004   0.062615   0   
+remove    -          -          -          -          -          -          0.062431   0   
+Max Write: 2255.48 MiB/sec (2365.04 MB/sec)
+Max Read:  8176.92 MiB/sec (8574.12 MB/sec)
+
+Summary of all tests:
+Operation   Max(MiB)   Min(MiB)  Mean(MiB)     StdDev   Max(OPs)   Min(OPs)  Mean(OPs)     StdDev    Mean(s) Test# #Tasks tPN reps fPP reord reordoff reordrand seed segcnt   blksiz    xsize aggs(MiB)   API RefNum
+write        2255.48    2255.48    2255.48       0.00     563.87     563.87     563.87       0.00    0.22700     0      1   1    1   1     0        1         0    0      8 67108864  4194304     512.0 POSIX      0
+read         8176.92    8176.92    8176.92       0.00    2044.23    2044.23    2044.23       0.00    0.06262     0      1   1    1   1     0        1         0    0      8 67108864  4194304     512.0 POSIX      0
+Finished            : Wed Aug  5 03:41:02 2026
