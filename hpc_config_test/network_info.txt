@@ -1,0 +1,15 @@
+网络配置信息：
+--------------------------------------------------
+网络名称 接口类型    最大传输单元MTU 理论带宽(Gb/s)
+--------------------------------------------------
+eno1       ether           1500     10.0           
+eno2       ether           1500     10.0           
+ib0        infiniband      2044     400.0          
+ib1        infiniband      2044     400.0          
+ib2        infiniband      2044     400.0          
+ib3        infiniband      2044     400.0          
+shca_0     InfiniBand      N/A      400            
+shca_1     InfiniBand      N/A      400            
+shca_2     InfiniBand      N/A      400            
+shca_3     InfiniBand      N/A      400            
+--------------------------------------------------
