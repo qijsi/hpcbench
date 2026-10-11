@@ -1,0 +1,12 @@
+-------------------------------------------------------------
+STREAM version $Revision: 1.0 $
+Array size = 22369621 (elements)
+Memory per array = 170.7 MiB (= 0.2 GiB).
+Each kernel will be executed 10 times.
+Number of threads: 32
+Function    Best Rate MB/s  Avg time     Min time     Max time
+Copy:           18825.7     0.019070     0.019012     0.019160
+Scale:          18570.7     0.019300     0.019273     0.019400
+Add:            19583.9     0.027869     0.027414     0.030847
+Triad:          19770.0     0.027298     0.027156     0.027477
+-------------------------------------------------------------

@@ -15,9 +15,9 @@ RESULTS_DIR="stream_results_$(date +%Y%m%d_%H%M%S)"
 STREAM_ORIGINAL="stream_original.c"
 STREAM_STRIDE="stream_stride.c"
 VERBOSE=${VERBOSE:-0}
-REPEAT_RUNS=${REPEAT_RUNS:-3}
+REPEAT_RUNS=${REPEAT_RUNS:-1}
 REPEAT_TOLERANCE_PCT=${REPEAT_TOLERANCE_PCT:-5}
-AUTOMATED_STRIDES=${AUTOMATED_STRIDES:-"1 4"}
+AUTOMATED_STRIDES=${AUTOMATED_STRIDES:-"1 4 8 16"}
 
 # Logging functions
 log_info() {
@@ -259,6 +259,28 @@ int main()
     }
     
     scalar = 3.0;
+
+    /* Warm up before all timed kernels. */
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (int j=0; j<STREAM_ARRAY_SIZE; j += STRIDE)
+        c[j] = a[j];
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (int j=0; j<STREAM_ARRAY_SIZE; j += STRIDE)
+        b[j] = scalar*c[j];
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (int j=0; j<STREAM_ARRAY_SIZE; j += STRIDE)
+        c[j] = a[j]+b[j];
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (int j=0; j<STREAM_ARRAY_SIZE; j += STRIDE)
+        a[j] = b[j]+scalar*c[j];
 
     /* --- MAIN LOOP --- */
     for (k=0; k<NTIMES; k++)
@@ -782,20 +804,20 @@ run_test_suite() {
 # Top-level menu (Chinese)
 show_main_menu() {
     echo ""
-    echo "=========================================="
-    echo "       内存性能测试"
-    echo "=========================================="
-    echo "1. 自动化内存性能测试"
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${BLUE}     HPC Memory Performance Testing     ${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${GREEN}1)${NC} 自动化内存性能测试"
     echo "   - 自动采集系统内存/Cache/NUMA 信息"
     echo "   - 自动设置数据大小并运行四种运算"
     echo "   - 先单 NUMA 节点，再跨 NUMA 节点"
     echo ""
-    echo "2. 手动内存性能测试"
+    echo -e "${GREEN}2)${NC} 手动内存性能测试"
     echo "   - 手动指定数据大小、线程数"
     echo "   - 选择单 NUMA 或跨 NUMA 测试"
     echo ""
-    echo "3. 退出"
-    echo "=========================================="
+    echo -e "${GREEN}3)${NC} 退出"
+    echo -e "${BLUE}========================================${NC}"
     echo -n "请选择 (1-3): "
 }
 
@@ -817,24 +839,22 @@ count_cpulist() {
 }
 
 get_numa_node_ids() {
-    local node_ids
+    local source_ids node_ids=""
 
-    node_ids=$(numactl --all --show 2>/dev/null |
-        awk "/^(cpubind|membind):/ {for (i=2; i<=NF; i++) if (\$i ~ /^[0-9]+\$/) print \$i}" |
-        sort -nu)
+    source_ids=$(numactl --all --show 2>/dev/null |
+        awk "/^(cpubind|nodebind|membind):/ {for (i=2; i<=NF; i++) if (\$i ~ /^[0-9]+\$/) print \$i}")
+    node_ids="$node_ids $source_ids"
 
-    if [ -z "$node_ids" ]; then
-        node_ids=$(find /sys/devices/system/node -maxdepth 1 -type d -name "node[0-9]*" 2>/dev/null |
-            sed "s/.*node//" | sort -nu)
-    fi
+    source_ids=$(find /sys/devices/system/node -maxdepth 1 -type d -name "node[0-9]*" 2>/dev/null |
+        sed "s/.*node//")
+    node_ids="$node_ids $source_ids"
 
-    if [ -z "$node_ids" ]; then
-        node_ids=$(numactl --hardware 2>/dev/null |
-            sed -n "s/^node \([0-9][0-9]*\) .*/\1/p" |
-            sort -nu)
-    fi
+    source_ids=$(numactl --hardware 2>/dev/null |
+        sed -n "s/^node \([0-9][0-9]*\) .*/\1/p")
+    node_ids="$node_ids $source_ids"
 
-    echo "$node_ids"
+    echo "$node_ids" | tr "[:space:]" "\n" |
+        grep -E "^[0-9]+$" | sort -nu
 }
 
 is_numa_cpu_node() {
@@ -1030,7 +1050,7 @@ run_four_ops_bound() {
             log_error "CPU NUMA 节点不可用: $cpu_node"
             return 1
         fi
-        if ! is_numa_mem_node "$mem_node"; then
+        if ! is_numa_mem_node "$mem_node" "$cpu_node"; then
             log_error "内存 NUMA 节点不可用: $mem_node"
             return 1
         fi
@@ -1139,13 +1159,44 @@ run_four_ops_bound() {
 }
 
 # Print consolidated memory performance report
+# Print a compact summary grouped by stride; repeated runs are averaged.
+print_stride_summary() {
+    local csv_file=$1
+
+    echo -e "${BLUE}  Stride Summary (MB/s):${NC}"
+    printf "  %-8s %-8s %-10s %-10s %-10s %-10s %-8s\n" "Stride" "Threads" "Copy" "Scale" "Add" "Triad" "Mode"
+    awk -F"," '
+        NR>1 && NF>=6 {
+            count[$1]++
+            sum[$1,1] += $3
+            sum[$1,2] += $4
+            sum[$1,3] += $5
+            sum[$1,4] += $6
+            threads[$1] = $2
+            mode[$1] = (NF >= 7 ? $7 : "")
+        }
+        END {
+            for (stride in count) {
+                printf "%s %s %.1f %.1f %.1f %.1f %s\n",
+                    stride, threads[stride],
+                    sum[stride,1]/count[stride],
+                    sum[stride,2]/count[stride],
+                    sum[stride,3]/count[stride],
+                    sum[stride,4]/count[stride],
+                    mode[stride]
+            }
+        }
+    ' "$csv_file" | sort -n | while read -r stride threads copy scale add triad mode; do
+        printf "  %-8s %-8s %-10.1f %-10.1f %-10.1f %-10.1f %-8s\n" \
+            "$stride" "$threads" "$copy" "$scale" "$add" "$triad" "${mode:--}"
+    done
+    echo ""
+}
+
 print_memory_performance_report() {
-    echo ""
-    echo "=============================================="
-    echo "           内存性能测试结果汇总"
-    echo "=============================================="
-    echo "结果目录: $RESULTS_DIR"
-    echo ""
+    echo -e "\n${YELLOW}=== Memory Performance Test Results ===${NC}"
+    echo -e "${BLUE}----------------------------------------${NC}"
+    echo "Results directory: $RESULTS_DIR"
 
     local found=0
     while IFS= read -r csv_file; do
@@ -1161,36 +1212,17 @@ print_memory_performance_report() {
             meta_mode=$MODE
         fi
 
-        echo "----------------------------------------------"
-        echo "测试项: $(basename "$suite_dir")"
-        echo "----------------------------------------------"
+        echo -e "${BLUE}----------------------------------------${NC}"
+        echo -e "${YELLOW}Test: $(basename "$suite_dir")${NC}"
+        echo -e "${BLUE}----------------------------------------${NC}"
         if [ -n "$meta_threads" ]; then
             printf "  线程数:     %s\n" "$meta_threads"
             if [ -n "$meta_array" ]; then
                 printf "  数据大小:   %s 元素 (约 %s)\n" "$meta_array" "$(format_array_footprint "$meta_array")"
             fi
-            awk -F',' 'NR>1 && $1==1 {copy=$3; scale=$4; add=$5; triad=$6; mode=$7} END {
-                if (copy != "") {
-                    printf "  Copy:       %s MB/s\n", copy
-                    printf "  Scale:      %s MB/s\n", scale
-                    printf "  Add:        %s MB/s\n", add
-                    printf "  Triad:      %s MB/s\n", triad
-                }
-            }' "$csv_file"
-            if [ -n "$meta_mode" ]; then
-                printf "  模式:       %s\n" "$meta_mode"
-            fi
-            echo ""
+            print_stride_summary "$csv_file"
         else
-            awk -F',' 'NR>1 && $1==1 {
-                printf "  线程数:     %s\n", $2
-                printf "  Copy:       %s MB/s\n", $3
-                printf "  Scale:      %s MB/s\n", $4
-                printf "  Add:        %s MB/s\n", $5
-                printf "  Triad:      %s MB/s\n", $6
-                if ($7 != "") printf "  模式:       %s\n", $7
-                print ""
-            }' "$csv_file"
+            print_stride_summary "$csv_file"
         fi
         if [ -f "$suite_dir/text_summary.txt" ]; then
             echo "  详细报告: $suite_dir/text_summary.txt"
@@ -1200,7 +1232,7 @@ print_memory_performance_report() {
     if [ $found -eq 0 ]; then
         log_warn "未找到测试结果文件"
     fi
-    echo "=============================================="
+    echo -e "${BLUE}----------------------------------------${NC}"
 }
 
 # Compare repeated runs in every results.csv. Spread is (max-min)/mean.
@@ -1288,11 +1320,20 @@ automated_memory_test() {
     local intra_size intra_threads inter_size inter_threads
     local cross_cpu="" cross_mem=1
     local remote_nodes=""
-    local strides="${AUTOMATED_STRIDES:-1 4}"
+    local strides="${AUTOMATED_STRIDES:-1 4 8 16}"
     local stride failed_tests=0
     local -a numa_node_ids=()
     local node_id
     read -ra numa_node_ids <<< "$(get_numa_node_ids)"
+
+    if [ "${#numa_node_ids[@]}" -lt "$NUMA_NODES" ]; then
+        log_warn "NUMA 候选节点不完整，按硬件报告补齐: ${numa_node_ids[*]}"
+        for ((node_id=0; node_id<NUMA_NODES; node_id++)); do
+            [[ " ${numa_node_ids[*]} " == *" $node_id "* ]] && continue
+            numa_node_ids+=("$node_id")
+        done
+        mapfile -t numa_node_ids < <(printf "%s\n" "${numa_node_ids[@]}" | sort -nu)
+    fi
 
     if [ "$NUMA_NODES" -gt 1 ] && command -v numactl &> /dev/null; then
         for node_id in "${numa_node_ids[@]}"; do
@@ -1309,28 +1350,17 @@ automated_memory_test() {
 
         intra_size=$(compute_memory_bw_array_size intra "$cross_cpu")
         intra_threads=$(get_numa_node_cpu_count "$cross_cpu")
-        for node_id in "${numa_node_ids[@]}"; do
-            [ "$node_id" -eq "$cross_cpu" ] && continue
-            if is_numa_mem_node "$node_id" "$cross_cpu"; then
-                remote_nodes="$remote_nodes $node_id"
-            else
-                log_warn "跳过不可用的内存 NUMA 节点: $node_id"
-            fi
-        done
-        inter_threads=$(get_numa_node_cpu_count "$cross_cpu")
-
-        if [ -z "$remote_nodes" ]; then
-            log_warn "NUMA 预检未选中远端节点，改用 numactl --all --show 的 membind 列表"
-            for node_id in "${numa_node_ids[@]}"; do
-                [ "$node_id" -eq "$cross_cpu" ] && continue
-                remote_nodes="$remote_nodes $node_id"
-            done
-        fi
-
-        if [ -z "$remote_nodes" ]; then
-            log_error "硬件报告 ${NUMA_NODES} 个 NUMA 节点，但没有可用的远端内存节点"
+        cross_cpu=0
+        remote_nodes="1"
+        if ! is_numa_cpu_node "$cross_cpu"; then
+            log_error "NUMA CPU 节点不可用: $cross_cpu"
             return 1
         fi
+        if ! is_numa_mem_node "$remote_nodes" "$cross_cpu"; then
+            log_error "NUMA 远端内存节点不可用: node$cross_cpu -> node$remote_nodes"
+            return 1
+        fi
+        inter_threads=$(get_numa_node_cpu_count "$cross_cpu")
     else
         intra_size=$(compute_memory_bw_array_size global)
         intra_threads=$(get_system_cpu_count)
@@ -1347,7 +1377,11 @@ automated_memory_test() {
     echo "  L3 Cache:   $((L3_SIZE_KB / 1024)) MB (全部节点)"
     echo "  每节点 LLC: $((LLC_SIZE_KB / 1024)) MB | 推荐最小数据块: $(format_array_footprint "$dram_min") (8×每节点LLC)"
     echo "  Strides:    $strides"
-    echo "  Runs:       $REPEAT_RUNS (容差: ${REPEAT_TOLERANCE_PCT}%)"
+    if [ "$REPEAT_RUNS" -gt 1 ]; then
+        echo "  Runs:       $REPEAT_RUNS (容差: ${REPEAT_TOLERANCE_PCT}%)"
+    else
+        echo "  Runs:       1"
+    fi
     echo "  [单 NUMA 节点]"
     echo "    数据大小:   $intra_size 元素 (约 $(format_array_footprint $intra_size), 约为 L3 的 ${l3_ratio} 倍)"
     echo "    可用内存:   节点${cross_cpu:-0}约 $(echo "scale=1; $(get_numa_node_free_kb "${cross_cpu:-0}") / 1024 / 1024" | bc) GB"
@@ -1393,8 +1427,8 @@ automated_memory_test() {
         done
     fi
 
-    echo ">>> 第五步: 输出重复性和性能汇总"
-    if ! write_repeatability_summary "$RESULTS_DIR"; then
+    echo ">>> 第五步: 输出性能汇总"
+    if [ "$REPEAT_RUNS" -gt 1 ] && ! write_repeatability_summary "$RESULTS_DIR"; then
         failed_tests=$((failed_tests + 1))
     fi
     print_memory_performance_report
@@ -2242,7 +2276,7 @@ main() {
 
     while true; do
         show_main_menu
-        read -r choice
+        read -r choice || choice=3
         echo ""
 
         case $choice in

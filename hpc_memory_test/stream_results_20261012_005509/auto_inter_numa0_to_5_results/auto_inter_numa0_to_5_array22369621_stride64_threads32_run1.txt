@@ -1,0 +1,12 @@
+-------------------------------------------------------------
+STREAM version with Stride = 64
+Array size = 22369621 (elements)
+Memory per array = 170.7 MiB (= 0.2 GiB).
+Each kernel will be executed 10 times.
+Number of threads: 32
+Function    Best Rate MB/s  Avg time     Min time     Max time
+Copy:            2306.2     0.002438     0.002425     0.002470
+Scale:           2291.1     0.002459     0.002441     0.002487
+Add:             2411.9     0.003495     0.003478     0.003526
+Triad:           2428.0     0.003468     0.003455     0.003488
+-------------------------------------------------------------

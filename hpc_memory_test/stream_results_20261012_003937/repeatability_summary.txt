@@ -1,0 +1,103 @@
+==============================================
+             Repeatability Summary
+==============================================
+Generated: Mon Oct 12 00:40:44 CST 2026
+Required runs: 3
+Tolerance: max-min <= 5% of mean for Copy/Scale/Add/Triad
+
+Suite: auto_inter_numa0_to_1_results
+  Stride=1 Mode=cross Runs=3
+    Copy   mean=   23249.3 min=   22223.9 max=   23901.0 spread=  7.21% FAIL
+    Scale  mean=   22754.0 min=   21237.3 max=   23554.9 spread= 10.19% FAIL
+    Add    mean=   24947.9 min=   23282.4 max=   25795.0 spread= 10.07% FAIL
+    Triad  mean=   25171.7 min=   23595.6 max=   26104.8 spread=  9.97% FAIL
+  Stride=4 Mode=cross Runs=3
+    Copy   mean=    5936.7 min=    5920.6 max=    5966.0 spread=  0.76% PASS
+    Scale  mean=    5774.6 min=    5632.2 max=    5854.5 spread=  3.85% PASS
+    Add    mean=    6398.1 min=    6382.8 max=    6413.6 spread=  0.48% PASS
+    Triad  mean=    6458.4 min=    6420.7 max=    6479.6 spread=  0.91% PASS
+
+Suite: auto_inter_numa0_to_2_results
+  Stride=1 Mode=cross Runs=3
+    Copy   mean=   23519.1 min=   23323.2 max=   23676.4 spread=  1.50% PASS
+    Scale  mean=   23119.3 min=   23062.7 max=   23230.8 spread=  0.73% PASS
+    Add    mean=   25224.3 min=   25155.6 max=   25271.9 spread=  0.46% PASS
+    Triad  mean=   25504.6 min=   25317.1 max=   25683.8 spread=  1.44% PASS
+  Stride=4 Mode=cross Runs=3
+    Copy   mean=    5844.6 min=    5822.4 max=    5867.1 spread=  0.76% PASS
+    Scale  mean=    5656.8 min=    5533.3 max=    5724.4 spread=  3.38% PASS
+    Add    mean=    6270.6 min=    6251.9 max=    6301.0 spread=  0.78% PASS
+    Triad  mean=    6298.7 min=    6213.2 max=    6360.2 spread=  2.33% PASS
+
+Suite: auto_inter_numa0_to_3_results
+  Stride=1 Mode=cross Runs=3
+    Copy   mean=   23371.8 min=   23336.6 max=   23431.4 spread=  0.41% PASS
+    Scale  mean=   22738.5 min=   22673.0 max=   22853.8 spread=  0.80% PASS
+    Add    mean=   24892.9 min=   24801.2 max=   24970.6 spread=  0.68% PASS
+    Triad  mean=   25244.5 min=   24977.8 max=   25482.9 spread=  2.00% PASS
+  Stride=4 Mode=cross Runs=3
+    Copy   mean=    5799.1 min=    5735.5 max=    5834.9 spread=  1.71% PASS
+    Scale  mean=    5644.1 min=    5624.1 max=    5657.0 spread=  0.58% PASS
+    Add    mean=    6178.2 min=    6157.0 max=    6198.3 spread=  0.67% PASS
+    Triad  mean=    6231.8 min=    6170.9 max=    6266.8 spread=  1.54% PASS
+
+Suite: auto_inter_numa0_to_4_results
+  Stride=1 Mode=cross Runs=3
+    Copy   mean=   18812.2 min=   18791.1 max=   18838.7 spread=  0.25% PASS
+    Scale  mean=   18592.0 min=   18578.5 max=   18598.8 spread=  0.11% PASS
+    Add    mean=   19585.3 min=   19576.1 max=   19598.8 spread=  0.12% PASS
+    Triad  mean=   19739.1 min=   19718.9 max=   19756.8 spread=  0.19% PASS
+  Stride=4 Mode=cross Runs=3
+    Copy   mean=    4711.9 min=    4708.4 max=    4717.1 spread=  0.18% PASS
+    Scale  mean=    4653.8 min=    4647.3 max=    4657.4 spread=  0.22% PASS
+    Add    mean=    4898.7 min=    4892.5 max=    4904.4 spread=  0.24% PASS
+    Triad  mean=    4946.9 min=    4944.7 max=    4949.2 spread=  0.09% PASS
+
+Suite: auto_inter_numa0_to_5_results
+  Stride=1 Mode=cross Runs=3
+    Copy   mean=   19257.9 min=   19249.1 max=   19263.4 spread=  0.07% PASS
+    Scale  mean=   19035.7 min=   18962.2 max=   19111.1 spread=  0.78% PASS
+    Add    mean=   20187.2 min=   20183.9 max=   20192.3 spread=  0.04% PASS
+    Triad  mean=   20392.0 min=   20372.4 max=   20411.0 spread=  0.19% PASS
+  Stride=4 Mode=cross Runs=3
+    Copy   mean=    4810.3 min=    4802.4 max=    4817.4 spread=  0.31% PASS
+    Scale  mean=    4746.4 min=    4741.1 max=    4749.1 spread=  0.17% PASS
+    Add    mean=    5019.7 min=    5013.2 max=    5024.2 spread=  0.22% PASS
+    Triad  mean=    5070.4 min=    5068.5 max=    5073.8 spread=  0.10% PASS
+
+Suite: auto_inter_numa0_to_6_results
+  Stride=1 Mode=cross Runs=3
+    Copy   mean=   18831.9 min=   18824.8 max=   18839.4 spread=  0.08% PASS
+    Scale  mean=   18566.5 min=   18550.5 max=   18591.9 spread=  0.22% PASS
+    Add    mean=   19537.5 min=   19534.0 max=   19541.1 spread=  0.04% PASS
+    Triad  mean=   19717.9 min=   19708.2 max=   19726.3 spread=  0.09% PASS
+  Stride=4 Mode=cross Runs=3
+    Copy   mean=    4709.5 min=    4699.2 max=    4717.4 spread=  0.39% PASS
+    Scale  mean=    4659.9 min=    4651.1 max=    4670.8 spread=  0.42% PASS
+    Add    mean=    4886.9 min=    4880.3 max=    4893.1 spread=  0.26% PASS
+    Triad  mean=    4928.8 min=    4919.5 max=    4938.5 spread=  0.39% PASS
+
+Suite: auto_inter_numa0_to_7_results
+  Stride=1 Mode=cross Runs=3
+    Copy   mean=   18410.1 min=   18375.4 max=   18429.4 spread=  0.29% PASS
+    Scale  mean=   18247.5 min=   18208.7 max=   18285.9 spread=  0.42% PASS
+    Add    mean=   18905.5 min=   18882.7 max=   18927.9 spread=  0.24% PASS
+    Triad  mean=   19007.5 min=   18980.7 max=   19041.4 spread=  0.32% PASS
+  Stride=4 Mode=cross Runs=3
+    Copy   mean=    4598.0 min=    4597.6 max=    4598.6 spread=  0.02% PASS
+    Scale  mean=    4562.5 min=    4559.6 max=    4567.1 spread=  0.16% PASS
+    Add    mean=    4723.8 min=    4721.7 max=    4726.6 spread=  0.10% PASS
+    Triad  mean=    4749.6 min=    4748.7 max=    4750.6 spread=  0.04% PASS
+
+Suite: auto_intra_numa0_results
+  Stride=4 Mode=intra Runs=3
+    Copy   mean=    6182.0 min=    6163.3 max=    6210.4 spread=  0.76% PASS
+    Scale  mean=    6048.7 min=    6047.1 max=    6050.4 spread=  0.05% PASS
+    Add    mean=    6618.8 min=    6602.0 max=    6630.4 spread=  0.43% PASS
+    Triad  mean=    6738.8 min=    6722.7 max=    6749.7 spread=  0.40% PASS
+  Stride=1 Mode=intra Runs=3
+    Copy   mean=   24636.3 min=   24572.0 max=   24688.8 spread=  0.47% PASS
+    Scale  mean=   24152.0 min=   24108.3 max=   24221.1 spread=  0.47% PASS
+    Add    mean=   26514.4 min=   26447.0 max=   26555.5 spread=  0.41% PASS
+    Triad  mean=   26874.6 min=   26718.1 max=   26984.1 spread=  0.99% PASS
+

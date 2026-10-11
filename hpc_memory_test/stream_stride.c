@@ -70,6 +70,28 @@ int main()
     
     scalar = 3.0;
 
+    /* Warm up before all timed kernels. */
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (int j=0; j<STREAM_ARRAY_SIZE; j += STRIDE)
+        c[j] = a[j];
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (int j=0; j<STREAM_ARRAY_SIZE; j += STRIDE)
+        b[j] = scalar*c[j];
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (int j=0; j<STREAM_ARRAY_SIZE; j += STRIDE)
+        c[j] = a[j]+b[j];
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (int j=0; j<STREAM_ARRAY_SIZE; j += STRIDE)
+        a[j] = b[j]+scalar*c[j];
+
     /* --- MAIN LOOP --- */
     for (k=0; k<NTIMES; k++)
     {
