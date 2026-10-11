@@ -18,19 +18,19 @@ VERBOSE=${VERBOSE:-0}
 
 # Logging functions
 log_info() {
-    [ "$VERBOSE" -eq 1 ] && echo -e "${GREEN}[INFO]${NC} $1"
+    [ "$VERBOSE" -eq 1 ] && echo -e "${GREEN}[INFO]${NC} $1" >&2
 }
 
 log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
+    echo -e "${YELLOW}[WARN]${NC} $1" >&2
 }
 
 log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${RED}[ERROR]${NC} $1" >&2
 }
 
 log_debug() {
-    [ "$VERBOSE" -eq 1 ] && echo -e "${BLUE}[DEBUG]${NC} $1"
+    [ "$VERBOSE" -eq 1 ] && echo -e "${BLUE}[DEBUG]${NC} $1" >&2
 }
 
 # Create results directory
@@ -483,12 +483,12 @@ compile_stream() {
     local compile_log="/tmp/stream_compile_$$.log"
     
     # Add error checking for array size
-    if [ $array_size -gt 2147483647 ]; then
+    if [ "$array_size" -gt 2147483647 ]; then
         log_warn "Array size too large ($array_size), reducing to maximum safe value"
         array_size=2147483647
     fi
     
-    if [ $stride -eq 1 ]; then
+    if [ "$stride" -eq 1 ]; then
         log_debug "Compiling continuous access version: $output_name (size: $array_size)"
         gcc -O3 -fopenmp -DSTREAM_ARRAY_SIZE=$array_size "$STREAM_ORIGINAL" -o "$output_name" 2>"$compile_log"
     else
