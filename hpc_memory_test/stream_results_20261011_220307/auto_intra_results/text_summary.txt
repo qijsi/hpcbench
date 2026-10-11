@@ -1,0 +1,17 @@
+============================================
+       Memory Performance Summary Report     
+============================================
+Generated: Sun Oct 11 22:03:08 CST 2026
+
+1. Thread Scaling Performance (Stride=1)
+--------------------------------------------
+Threads  Copy      Scale     Add       Triad
+128      105987.0  103652.5  98074.9   103464.4 
+
+2. Memory Access Pattern Performance (MB/s)
+--------------------------------------------
+
+Thread Count: 128
+Stride   Copy      Scale     Add       Triad
+--------------------------------------------
+1        105987.0  103652.5  98074.9   103464.4 
