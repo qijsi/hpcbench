@@ -122,7 +122,7 @@ run_parallel_shared_write_read() {
     output_file="${OUTPUT_DIR}/${test_name}.txt"
     
     # N:1 shared-file mode requires xfer-size == block-size when segments > 1
-    mpirun --allow-run-as-root -np ${NUM_PROCS} ior -a POSIX -t ${BLOCK_SIZE} -b ${BLOCK_SIZE} \
+    mpirun -np ${NUM_PROCS} ior -a POSIX -t ${BLOCK_SIZE} -b ${BLOCK_SIZE} \
         -s ${SEGMENTS} -o ${TEST_FILE_PATH}_parallel_shared_w -w -r > ${output_file} 2>&1
     
     if [ $? -eq 0 ]; then
@@ -142,7 +142,7 @@ run_parallel_independent_write_read() {
     output_file="${OUTPUT_DIR}/${test_name}.txt"
     
     # Run IOR test and capture all output
-    mpirun --allow-run-as-root -np ${NUM_PROCS} ior -a POSIX -t ${TRANSFER_SIZE} -b ${BLOCK_SIZE} \
+    mpirun -np ${NUM_PROCS} ior -a POSIX -t ${TRANSFER_SIZE} -b ${BLOCK_SIZE} \
         -s ${SEGMENTS} -F -o ${TEST_FILE_PATH}_parallel_independent_w -w -r > ${output_file} 2>&1
     
     if [ $? -eq 0 ]; then
@@ -212,7 +212,7 @@ run_thread_scaling_tests() {
         local shared_output="${OUTPUT_DIR}/${shared_test_name}.txt"
         
         # N:1 shared-file mode requires xfer-size == block-size when segments > 1
-        mpirun --allow-run-as-root -np $threads ior -a POSIX -t ${BLOCK_SIZE} -b ${BLOCK_SIZE} \
+        mpirun -np $threads ior -a POSIX -t ${BLOCK_SIZE} -b ${BLOCK_SIZE} \
             -s ${SEGMENTS} -o ${TEST_FILE_PATH}_thread_scaling_shared -w -r > "$shared_output" 2>&1
         
         # Independent file access test
@@ -220,7 +220,7 @@ run_thread_scaling_tests() {
         local indep_test_name="thread_scaling_independent_${threads}_${TIMESTAMP}"
         local indep_output="${OUTPUT_DIR}/${indep_test_name}.txt"
         
-        mpirun --allow-run-as-root -np $threads ior -a POSIX -t ${TRANSFER_SIZE} -b ${BLOCK_SIZE} \
+        mpirun -np $threads ior -a POSIX -t ${TRANSFER_SIZE} -b ${BLOCK_SIZE} \
             -s ${SEGMENTS} -F -o ${TEST_FILE_PATH}_thread_scaling_independent -w -r > "$indep_output" 2>&1
         
         # Extract and display results
