@@ -1,2 +1,0 @@
-Stride,Threads,Copy_MB/s,Scale_MB/s,Add_MB/s,Triad_MB/s,Mode
-1,128,105987.0,103652.5,98074.9,103464.4,none

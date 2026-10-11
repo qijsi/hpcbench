@@ -796,6 +796,37 @@ count_cpulist() {
     echo "$count"
 }
 
+get_numa_node_ids() {
+    local node_ids
+
+    node_ids=$(numactl --show 2>/dev/null |
+        awk "/^(cpubind|membind):/ {for (i=2; i<=NF; i++) if (\$i ~ /^[0-9]+\$/) print \$i}" |
+        sort -nu)
+
+    if [ -z "$node_ids" ]; then
+        node_ids=$(numactl --hardware 2>/dev/null |
+            awk "\$1 == \"node\" && \$2 ~ /^[0-9]+:\$/ {sub(\":\", \"\", \$2); print \$2}" |
+            sort -nu)
+    fi
+
+    if [ -z "$node_ids" ]; then
+        node_ids=$(find /sys/devices/system/node -maxdepth 1 -type d -name "node[0-9]*" 2>/dev/null |
+            sed "s/.*node//" | sort -nu)
+    fi
+
+    echo "$node_ids"
+}
+
+is_numa_cpu_node() {
+    command -v numactl &> /dev/null &&
+        numactl --cpunodebind="$1" true > /dev/null 2>&1
+}
+
+is_numa_mem_node() {
+    command -v numactl &> /dev/null &&
+        numactl --membind="$1" true > /dev/null 2>&1
+}
+
 # Total logical CPUs on the system (prefer lscpu over nproc to avoid cgroup limits)
 get_system_cpu_count() {
     local cpus
@@ -970,6 +1001,17 @@ run_four_ops_bound() {
     local bind_mode=$4
     local cpu_node=${5:-0}
     local mem_node=${6:-0}
+
+    if [ "$bind_mode" != "none" ]; then
+        if ! is_numa_cpu_node "$cpu_node"; then
+            log_error "CPU NUMA 节点不可用: $cpu_node"
+            return 1
+        fi
+        if ! is_numa_mem_node "$mem_node"; then
+            log_error "内存 NUMA 节点不可用: $mem_node"
+            return 1
+        fi
+    fi
 
     if [ -z "$threads" ] || [ "$threads" -lt 1 ] 2>/dev/null; then
         case "$bind_mode" in
@@ -1153,13 +1195,32 @@ automated_memory_test() {
     local intra_size intra_threads inter_size inter_threads
     local cross_cpu=0 cross_mem=1
     local remote_nodes=""
+    local -a numa_node_ids=()
+    local node_id
+    read -ra numa_node_ids <<< "$(get_numa_node_ids)"
 
     if [ "$NUMA_NODES" -gt 1 ] && command -v numactl &> /dev/null; then
-        intra_size=$(compute_memory_bw_array_size intra 0)
-        intra_threads=$(get_numa_node_cpu_count 0)
-        for ((cross_mem=0; cross_mem<NUMA_NODES; cross_mem++)); do
-            [ "$cross_mem" -eq "$cross_cpu" ] && continue
-            remote_nodes="$remote_nodes $cross_mem"
+        for node_id in "${numa_node_ids[@]}"; do
+            if is_numa_cpu_node "$node_id"; then
+                cross_cpu=$node_id
+                break
+            fi
+        done
+
+        if [ -z "$cross_cpu" ]; then
+            log_error "未找到当前进程可绑定的 CPU NUMA 节点"
+            return 1
+        fi
+
+        intra_size=$(compute_memory_bw_array_size intra "$cross_cpu")
+        intra_threads=$(get_numa_node_cpu_count "$cross_cpu")
+        for node_id in "${numa_node_ids[@]}"; do
+            [ "$node_id" -eq "$cross_cpu" ] && continue
+            if is_numa_mem_node "$node_id"; then
+                remote_nodes="$remote_nodes $node_id"
+            else
+                log_warn "跳过不可用的内存 NUMA 节点: $node_id"
+            fi
         done
         inter_threads=$(get_numa_node_cpu_count "$cross_cpu")
     else
@@ -1178,9 +1239,9 @@ automated_memory_test() {
     echo "  L3 Cache:   $((L3_SIZE_KB / 1024)) MB | 推荐最小数据块: $(format_array_footprint "$dram_min") (8×L3)"
     echo "  [单 NUMA 节点]"
     echo "    数据大小:   $intra_size 元素 (约 $(format_array_footprint $intra_size), 约为 L3 的 ${l3_ratio} 倍)"
-    echo "    可用内存:   节点0约 $(echo "scale=1; $(get_numa_node_free_kb 0) / 1024 / 1024" | bc) GB"
-    echo "    线程数:     $intra_threads (节点0全部逻辑CPU，测本地内存峰值带宽)"
-    echo "    NUMA 节点:  0 (CPU+内存绑定)"
+    echo "    可用内存:   节点${cross_cpu:-0}约 $(echo "scale=1; $(get_numa_node_free_kb "${cross_cpu:-0}") / 1024 / 1024" | bc) GB"
+    echo "    线程数:     $intra_threads (节点${cross_cpu:-0}全部逻辑CPU，测本地内存峰值带宽)"
+    echo "    NUMA 节点:  ${cross_cpu:-0} (CPU+内存绑定)"
     for cross_mem in $remote_nodes; do
         inter_size=$(compute_memory_bw_array_size cross "$cross_mem")
         echo "  [跨 NUMA 节点: ${cross_cpu} -> ${cross_mem}]"
@@ -1193,7 +1254,7 @@ automated_memory_test() {
 
     echo ">>> 第三步: 单 NUMA 节点性能测试"
     if [ "$NUMA_NODES" -gt 1 ] && command -v numactl &> /dev/null; then
-        run_four_ops_bound "$intra_size" "$intra_threads" "auto_intra_numa0" "intra" 0 0
+        run_four_ops_bound "$intra_size" "$intra_threads" "auto_intra_numa${cross_cpu:-0}" "intra" "${cross_cpu:-0}" "${cross_cpu:-0}"
     else
         run_four_ops_bound "$intra_size" "$intra_threads" "auto_intra" "none"
     fi
