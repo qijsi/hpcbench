@@ -1,1 +1,0 @@
-storage_test.sh: line 138: mpirun: command not found
