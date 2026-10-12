@@ -54,21 +54,6 @@ MESSAGE_SIZES=(1 1024 65536 1048576 4194304 16777216)  # Message sizes in bytes
 TEST_ITERATIONS=1000  # Number of iterations for each test
 WARMUP_ITERATIONS=100  # Number of warmup iterations
 
-# Collective Bandwidth Test Configuration
-COLLECTIVE_BW_MAX_SIZE=16777216  # 16MB max message size for bandwidth tests
-COLLECTIVE_BW_ITERATIONS=1000    # Default iterations for bandwidth tests
-COLLECTIVE_BW_WARMUP=100         # Default warmup iterations for bandwidth tests
-
-# Collective Type Mapping for osu_collective_bandwidth_fixed
-# Based on: 0=Allreduce, 1=Alltoall, 2=Allgather, 3=Broadcast, 4=Reduce, 5=Scatter
-declare -A COLLECTIVE_TYPE_MAP=(
-    ["Allreduce"]=0
-    ["Alltoall"]=1
-    ["Allgather"]=2
-    ["Broadcast"]=3
-    ["Reduce"]=4
-    ["Scatter"]=5
-)
 
 # Color Configuration for Output
 RED='\033[0;31m'
@@ -84,7 +69,6 @@ LOG_FILE="$RESULT_DIR/test.log"
 # Test Timeouts (in seconds)
 P2P_TIMEOUT=300
 COLLECTIVE_TIMEOUT=600
-COLLECTIVE_BW_TIMEOUT=900  # Longer timeout for bandwidth tests
 ONE_SIDED_TIMEOUT=300
 STARTUP_TIMEOUT=60
 
@@ -616,7 +600,7 @@ calculate_statistics() {
             stats+=$'\n'"Peak Bandwidth: ${peak_bw:-N/A} MB/s"
             ;;
             
-        *"Bandwidth"*|*"Bi-directional Bandwidth"*|*"Collective Bandwidth"*)
+        *"Bandwidth"*|*"Bi-directional Bandwidth"*)
             local avg_bw=$(awk '/^[0-9]/ {sum+=$2; count++} END {if(count>0) printf "%.2f", sum/count}' "$result_file")
             local peak_bw=$(awk '/^[0-9]/ {if($2>max) max=$2} END {printf "%.2f", max}' "$result_file")
             local min_bw=$(awk '/^[0-9]/ {if(min=="" || $2<min) min=$2} END {printf "%.2f", min}' "$result_file")
