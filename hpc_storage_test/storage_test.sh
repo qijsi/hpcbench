@@ -24,9 +24,11 @@ NC='\033[0m' # No Color
 DEFAULT_TRANSFER_SIZE="4m"
 DEFAULT_BLOCK_SIZE="64m"
 DEFAULT_SEGMENTS="8"
-DEFAULT_NUM_PROCS="8"
+DEFAULT_NUM_PROCS="16"
 DEFAULT_OUTPUT_DIR="./ior_results"
 DEFAULT_TEST_FILE="testfile"
+MPIRUN_FLAGS="${MPIRUN_FLAGS:-}"
+PARALLEL_PROCS=(2 4 8 16 32 64 128)
 
 # Thread scaling test configurations
 MAX_CORES=$(nproc)
@@ -51,7 +53,7 @@ show_menu() {
     echo -e "${GREEN}1)${NC} Custom Test (User-defined parameters)"
     echo -e "${GREEN}2)${NC} Full Benchmark Suite"
     echo -e "${GREEN}3)${NC} Serial Tests Only"
-    echo -e "${GREEN}4)${NC} Parallel Tests Only"
+    echo -e "${GREEN}4)${NC} Parallel Scaling Tests (2-128 procs)"
     echo -e "${GREEN}5)${NC} Thread Scaling Tests"
     echo -e "${GREEN}6)${NC} Block Size Scaling Test"
     echo -e "${GREEN}7)${NC} View Recent Results"
@@ -173,11 +175,54 @@ run_serial_tests() {
 
 # Function to run parallel tests only
 run_parallel_tests() {
-    echo -e "${YELLOW}Starting Parallel Tests${NC}"
-    run_parallel_shared_write_read
-    run_parallel_independent_write_read
+    local csv_file="${OUTPUT_DIR}/parallel_scaling_${TIMESTAMP}.csv"
+    local procs mode
 
-    echo -e "${GREEN}Parallel tests completed!${NC}"
+    echo -e "${YELLOW}Starting Parallel Scaling Tests${NC}"
+    echo "Process sequence: ${PARALLEL_PROCS[*]}"
+    echo "Each process reads and writes 512 MiB (64 MiB block x 8 segments)."
+    echo "CSV summary: $csv_file"
+
+    echo "Mode,Processes,Operation,Bandwidth_MiBs,IOPS,Latency_s,Status,OutputFile" > "$csv_file"
+
+    for procs in "${PARALLEL_PROCS[@]}"; do
+        for mode in shared independent; do
+            local transfer_size
+            local test_file="${TEST_FILE_PATH}_scaling_${mode}_${procs}p"
+            local output_file="${OUTPUT_DIR}/parallel_scaling_${mode}_${procs}p_${TIMESTAMP}.txt"
+            local ior_args
+
+            if [[ "$mode" == "shared" ]]; then
+                transfer_size="$BLOCK_SIZE"
+                ior_args=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -o "$test_file" -w -r)
+            else
+                transfer_size="$TRANSFER_SIZE"
+                ior_args=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -F -o "$test_file" -w -r)
+            fi
+
+            echo -e "\n${BLUE}Running ${mode} test with ${procs} processes${NC}"
+            if mpirun $MPIRUN_FLAGS -np "$procs" ior "${ior_args[@]}" > "$output_file" 2>&1; then
+                echo -e "${GREEN}Completed ${mode} test with ${procs} processes${NC}"
+                display_test_results "$output_file" "Parallel Scaling ${mode} (${procs} procs)"
+
+                while IFS= read -r line; do
+                    local operation bandwidth iops latency
+                    operation=$(printf "%s\n" "$line" | awk "{print \$1}")
+                    bandwidth=$(printf "%s\n" "$line" | awk "{print \$2}")
+                    iops=$(printf "%s\n" "$line" | awk "{print \$3}")
+                    latency=$(printf "%s\n" "$line" | awk "{print \$4}")
+                    echo "${mode},${procs},${operation},${bandwidth},${iops},${latency},ok,${output_file}" >> "$csv_file"
+                done < <(grep -E "^(write|read) " "$output_file" | head -n 2)
+            else
+                echo -e "${RED}Failed ${mode} test with ${procs} processes${NC}"
+                echo "${mode},${procs},NA,0,0,0,failed,${output_file}" >> "$csv_file"
+                cat "$output_file"
+            fi
+        done
+    done
+
+    echo -e "\n${GREEN}Parallel scaling tests completed!${NC}"
+    echo "CSV summary: $csv_file"
 }
 
 # Function to run thread scaling tests with enhanced output
@@ -413,7 +458,7 @@ set_recommended_parameters() {
     TRANSFER_SIZE="4m"  # Good for most systems
     BLOCK_SIZE=${recommended_block_size}
     SEGMENTS="8"
-    NUM_PROCS=$(nproc)  # Use all available cores
+    NUM_PROCS="${DEFAULT_NUM_PROCS}"
     OUTPUT_DIR="${DEFAULT_OUTPUT_DIR}"
     TEST_FILE_PATH="${DEFAULT_TEST_FILE}"
     
