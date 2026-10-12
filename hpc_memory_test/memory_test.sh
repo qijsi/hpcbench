@@ -841,7 +841,7 @@ count_cpulist() {
 get_numa_node_ids() {
     local source_ids node_ids=""
 
-    source_ids=$(numactl --all --show 2>/dev/null |
+    source_ids=$(numactl --show 2>/dev/null |
         awk "/^(cpubind|nodebind|membind):/ {for (i=2; i<=NF; i++) if (\$i ~ /^[0-9]+\$/) print \$i}")
     node_ids="$node_ids $source_ids"
 
@@ -859,12 +859,58 @@ get_numa_node_ids() {
 
 is_numa_cpu_node() {
     command -v numactl &> /dev/null &&
-        numactl --all --cpunodebind="$1" true > /dev/null 2>&1
+        numactl --cpunodebind="$1" true > /dev/null 2>&1
 }
 
 is_numa_mem_node() {
     command -v numactl &> /dev/null &&
-        numactl --all --cpunodebind="${2:-$1}" --membind="$1" true > /dev/null 2>&1
+        numactl --cpunodebind="${2:-$1}" --membind="$1" true > /dev/null 2>&1
+}
+
+get_numa_distance() {
+    local src=$1 dst=$2
+    local distance_file="/sys/devices/system/node/node${src}/distance"
+    local distance
+
+    distance=$(numactl --hardware 2>/dev/null | awk -v src="$src" -v dst="$dst" '
+        /^node distances:/ {
+            in_matrix = 1
+            next
+        }
+        in_matrix && $1 == "node" {
+            for (i = 2; i <= NF; i++)
+                if ($i + 0 == dst + 0)
+                    column = i
+            next
+        }
+        in_matrix && $1 ~ /^[0-9]+:$/ {
+            split($1, node_id, ":")
+            if (node_id[1] + 0 == src + 0 && column) {
+                print $column
+                exit
+            }
+        }
+    ')
+
+    if [ -n "$distance" ]; then
+        echo "$distance"
+        return
+    fi
+
+    if [ -r "$distance_file" ]; then
+        awk -v dst="$dst" '
+            BEGIN { offset = 0 }
+            {
+                for (i = 1; i <= NF; i++) {
+                    if (offset == dst) {
+                        print $i
+                        exit
+                    }
+                    offset++
+                }
+            }
+        ' "$distance_file"
+    fi
 }
 
 # Total logical CPUs on the system (prefer lscpu over nproc to avoid cgroup limits)
@@ -1058,7 +1104,7 @@ run_four_ops_bound() {
 
     if [ -z "$threads" ] || [ "$threads" -lt 1 ] 2>/dev/null; then
         case "$bind_mode" in
-            intra|cross) threads=$(get_numa_node_cpu_count "$cpu_node") ;;
+            intra|cross*) threads=$(get_numa_node_cpu_count "$cpu_node") ;;
             *) threads=$(get_system_cpu_count) ;;
         esac
     fi
@@ -1088,11 +1134,11 @@ run_four_ops_bound() {
     local run_exit=0
     case "$bind_mode" in
         intra)
-            numactl --all --cpunodebind="$cpu_node" --membind="$mem_node" ./"$executable" > "$output_file" 2>&1
+            numactl --cpunodebind="$cpu_node" --membind="$mem_node" ./"$executable" > "$output_file" 2>&1
             run_exit=$?
             ;;
-        cross)
-            numactl --all --cpunodebind="$cpu_node" --membind="$mem_node" ./"$executable" > "$output_file" 2>&1
+        cross*)
+            numactl --cpunodebind="$cpu_node" --membind="$mem_node" ./"$executable" > "$output_file" 2>&1
             run_exit=$?
             ;;
         *)
@@ -1113,8 +1159,8 @@ run_four_ops_bound() {
             compile_stream "$retry_size" "$stride" "$retry_exec" || return 1
             used_array_size=$retry_size
             case "$bind_mode" in
-                intra) numactl --all --cpunodebind="$cpu_node" --membind="$mem_node" ./"$retry_exec" > "$output_file" 2>&1 ;;
-                cross) numactl --all --cpunodebind="$cpu_node" --membind="$mem_node" ./"$retry_exec" > "$output_file" 2>&1 ;;
+                intra) numactl --cpunodebind="$cpu_node" --membind="$mem_node" ./"$retry_exec" > "$output_file" 2>&1 ;;
+                cross*) numactl --cpunodebind="$cpu_node" --membind="$mem_node" ./"$retry_exec" > "$output_file" 2>&1 ;;
                 *) ./"$retry_exec" > "$output_file" 2>&1 ;;
             esac
             rm -f "$retry_exec"
@@ -1141,8 +1187,10 @@ run_four_ops_bound() {
 
         echo "$stride,$actual_threads,$copy,$scale,$add,$triad,$bind_mode" >> "$csv_file"
 
+        local access_label
+        access_label=$(access_mode_label "$bind_mode" "$stride")
         echo ""
-        echo "【${suite_name}】四种运算带宽 (MB/s):"
+        echo "【${access_label}】四种运算带宽 (MB/s):"
         printf "  %-10s %12s\n" "线程数" "$actual_threads"
         printf "  %-10s %12s\n" "Copy" "$copy"
         printf "  %-10s %12s\n" "Scale" "$scale"
@@ -1158,39 +1206,96 @@ run_four_ops_bound() {
     generate_text_summary "$suite_dir"
 }
 
-# Print consolidated memory performance report
-# Print a compact summary grouped by stride; repeated runs are averaged.
+access_mode_label() {
+    local bind_mode=$1
+    local stride=$2
+
+    if [ "$bind_mode" = "intra" ]; then
+        [ "$stride" -eq 1 ] && echo "NUMA内连续访问" || echo "NUMA内跨步访问"
+    elif [[ "$bind_mode" == cross_* ]]; then
+        local -a mode_fields=()
+        IFS='_' read -ra mode_fields <<< "$bind_mode"
+        local src=${mode_fields[1]}
+        local dst=${mode_fields[2]}
+        local distance=${mode_fields[3]#d}
+        local operation
+        [ "$stride" -eq 1 ] && operation="连续" || operation="跨步"
+        echo "跨NUMA节点${src}->${dst}(距离${distance})${operation}访问"
+    elif [ "$bind_mode" = "cross" ]; then
+        [ "$stride" -eq 1 ] && echo "跨NUMA连续访问" || echo "跨NUMA跨步访问"
+    else
+        [ "$stride" -eq 1 ] && echo "本机连续访问" || echo "本机跨步访问"
+    fi
+}
+
+# Print a compact summary grouped by access mode and stride; repeated runs are averaged.
 print_stride_summary() {
     local csv_file=$1
 
-    echo -e "${BLUE}  Stride Summary (MB/s):${NC}"
-    printf "  %-8s %-8s %-10s %-10s %-10s %-10s %-8s\n" "Stride" "Threads" "Copy" "Scale" "Add" "Triad" "Mode"
+    echo -e "${BLUE}  访问模式带宽汇总 (MB/s):${NC}"
+    printf "  %-34s %-8s %-8s %-12s %-12s %-12s %-12s\n" "访问类型" "Stride" "Threads" "Copy" "Scale" "Add" "Triad"
     awk -F"," '
         NR>1 && NF>=6 {
-            count[$1]++
-            sum[$1,1] += $3
-            sum[$1,2] += $4
-            sum[$1,3] += $5
-            sum[$1,4] += $6
-            threads[$1] = $2
-            mode[$1] = (NF >= 7 ? $7 : "")
+            key = $1 SUBSEP $7
+            count[key]++
+            sum[key,1] += $3
+            sum[key,2] += $4
+            sum[key,3] += $5
+            sum[key,4] += $6
+            threads[key] = $2
+            stride_value[key] = $1
+            mode[key] = $7
         }
         END {
-            for (stride in count) {
-                printf "%s %s %.1f %.1f %.1f %.1f %s\n",
-                    stride, threads[stride],
-                    sum[stride,1]/count[stride],
-                    sum[stride,2]/count[stride],
-                    sum[stride,3]/count[stride],
-                    sum[stride,4]/count[stride],
-                    mode[stride]
+            for (key in count) {
+                stride = stride_value[key]
+                access_mode = mode[key]
+                if (access_mode == "intra") {
+                    order = (stride == 1 ? 1 : 2)
+                    label = (stride == 1 ? "NUMA内连续访问" : "NUMA内跨步访问")
+                } else if (access_mode == "cross") {
+                    order = (stride == 1 ? 3 : 4)
+                    label = (stride == 1 ? "跨NUMA连续访问" : "跨NUMA跨步访问")
+                } else if (access_mode ~ /^cross_/) {
+                    split(access_mode, mode_parts, "_")
+                    src_node = mode_parts[2]
+                    dst_node = mode_parts[3]
+                    distance = substr(mode_parts[4], 2)
+                    order = 10 + distance * 100000 + src_node * 1000 + dst_node * 10 + (stride == 1 ? 0 : 1)
+                    label = "跨NUMA节点" src_node "->" dst_node "(距离" distance ")"
+                } else {
+                    order = (stride == 1 ? 5 : 6)
+                    label = (stride == 1 ? "本机连续访问" : "本机跨步访问")
+                }
+                printf "%d\t%s\t%s\t%s\t%.1f\t%.1f\t%.1f\t%.1f\n",
+                    order, label, stride, threads[key],
+                    sum[key,1]/count[key], sum[key,2]/count[key],
+                    sum[key,3]/count[key], sum[key,4]/count[key]
             }
         }
-    ' "$csv_file" | sort -n | while read -r stride threads copy scale add triad mode; do
-        printf "  %-8s %-8s %-10.1f %-10.1f %-10.1f %-10.1f %-8s\n" \
-            "$stride" "$threads" "$copy" "$scale" "$add" "$triad" "${mode:--}"
+    ' "$csv_file" | sort -t "$(printf '\t')" -k1,1n | while IFS=$'\t' read -r order label stride threads copy scale add triad; do
+        printf "  %-34s %-8s %-8s %-12.1f %-12.1f %-12.1f %-12.1f\n" \
+            "$label" "$stride" "$threads" "$copy" "$scale" "$add" "$triad"
     done
     echo ""
+}
+
+print_representative_access_summary() {
+    local combined_csv="$RESULTS_DIR/representative_summary.csv"
+
+    echo -e "\n${YELLOW}=== 代表性访问模式汇总 ===${NC}"
+    if [ "${NUMA_NODES:-1}" -le 1 ]; then
+        echo "说明: 当前系统仅 1 个 NUMA 节点，跨NUMA项不适用。"
+    else
+        echo "说明: 跨NUMA结果为远端内存访问；每种 NUMA 距离只选择一个节点。"
+    fi
+    {
+        echo "Stride,Threads,Copy_MB/s,Scale_MB/s,Add_MB/s,Triad_MB/s,Mode"
+        while IFS= read -r csv_file; do
+            tail -n +2 "$csv_file"
+        done < <(find "$RESULTS_DIR" -name "results.csv" -type f | sort)
+    } > "$combined_csv"
+    print_stride_summary "$combined_csv"
 }
 
 print_memory_performance_report() {
@@ -1316,11 +1421,16 @@ automated_memory_test() {
     echo ""
     echo ">>> 第一步: 系统硬件信息"
     show_system_summary
+    if [ "${NUMA_NODES:-1}" -le 1 ]; then
+        log_warn "当前系统仅报告 1 个 NUMA 节点，本次只能运行本机连续/跨步访问，无法运行跨NUMA测试"
+    fi
 
     local intra_size intra_threads inter_size inter_threads
-    local cross_cpu="" cross_mem=1
+    local test_threads="${MEMORY_TEST_THREADS:-1}"
+    local cross_cpu="" cross_mem="" cross_distance=""
     local remote_nodes=""
-    local strides="${AUTOMATED_STRIDES:-1 4 8 16}"
+    local -A remote_distances=()
+    local strides="1 16"
     local stride failed_tests=0
     local -a numa_node_ids=()
     local node_id
@@ -1349,21 +1459,34 @@ automated_memory_test() {
         fi
 
         intra_size=$(compute_memory_bw_array_size intra "$cross_cpu")
-        intra_threads=$(get_numa_node_cpu_count "$cross_cpu")
-        cross_cpu=0
-        remote_nodes="1"
-        if ! is_numa_cpu_node "$cross_cpu"; then
-            log_error "NUMA CPU 节点不可用: $cross_cpu"
+        intra_threads=$test_threads
+        inter_threads=$test_threads
+
+        for node_id in "${numa_node_ids[@]}"; do
+            [ "$node_id" -eq "$cross_cpu" ] && continue
+            is_numa_mem_node "$node_id" "$cross_cpu" || continue
+            cross_distance=$(get_numa_distance "$cross_cpu" "$node_id")
+            [[ "$cross_distance" =~ ^[0-9]+$ ]] || continue
+            duplicate_distance=0
+            for selected_distance in "${remote_distances[@]}"; do
+                if [ "$selected_distance" -eq "$cross_distance" ]; then
+                    duplicate_distance=1
+                    break
+                fi
+            done
+            [ "$duplicate_distance" -eq 0 ] || continue
+            remote_nodes="$remote_nodes $node_id"
+            remote_distances["$node_id"]=$cross_distance
+        done
+        remote_nodes=${remote_nodes# }
+
+        if [ -z "$remote_nodes" ]; then
+            log_error "当前进程可绑定 CPU NUMA 节点 node$cross_cpu，但没有可绑定的远端内存节点"
             return 1
         fi
-        if ! is_numa_mem_node "$remote_nodes" "$cross_cpu"; then
-            log_error "NUMA 远端内存节点不可用: node$cross_cpu -> node$remote_nodes"
-            return 1
-        fi
-        inter_threads=$(get_numa_node_cpu_count "$cross_cpu")
     else
         intra_size=$(compute_memory_bw_array_size global)
-        intra_threads=$(get_system_cpu_count)
+        intra_threads=$test_threads
         inter_size=""
         inter_threads=""
     fi
@@ -1376,7 +1499,7 @@ automated_memory_test() {
     echo "  说明: 内存带宽测试工作集 >= max(8×每节点LLC, 标准512MiB)，由可用内存上限约束"
     echo "  L3 Cache:   $((L3_SIZE_KB / 1024)) MB (全部节点)"
     echo "  每节点 LLC: $((LLC_SIZE_KB / 1024)) MB | 推荐最小数据块: $(format_array_footprint "$dram_min") (8×每节点LLC)"
-    echo "  Strides:    $strides"
+    echo "  Strides:    1 (连续访问), 16 (代表性跨步访问)"
     if [ "$REPEAT_RUNS" -gt 1 ]; then
         echo "  Runs:       $REPEAT_RUNS (容差: ${REPEAT_TOLERANCE_PCT}%)"
     else
@@ -1385,13 +1508,14 @@ automated_memory_test() {
     echo "  [单 NUMA 节点]"
     echo "    数据大小:   $intra_size 元素 (约 $(format_array_footprint $intra_size), 约为 L3 的 ${l3_ratio} 倍)"
     echo "    可用内存:   节点${cross_cpu:-0}约 $(echo "scale=1; $(get_numa_node_free_kb "${cross_cpu:-0}") / 1024 / 1024" | bc) GB"
-    echo "    线程数:     $intra_threads (节点${cross_cpu:-0}全部逻辑CPU，测本地内存峰值带宽)"
+    echo "    线程数:     $intra_threads (默认单线程，用于访问模式/NUMA位置对比)"
     echo "    NUMA 节点:  ${cross_cpu:-0} (CPU+内存绑定)"
     for cross_mem in $remote_nodes; do
+        cross_distance=${remote_distances[$cross_mem]}
         inter_size=$(compute_memory_bw_array_size cross "$cross_mem")
-        echo "  [跨 NUMA 节点: ${cross_cpu} -> ${cross_mem}]"
+        echo "  [跨 NUMA 节点: ${cross_cpu} -> ${cross_mem}, 距离=${cross_distance}]"
         echo "    数据大小:   $inter_size 元素 (约 $(format_array_footprint $inter_size))"
-        echo "    线程数:     $inter_threads (CPU节点${cross_cpu}全部逻辑CPU，测远端内存带宽)"
+        echo "    线程数:     $inter_threads (默认单线程，用于访问模式/NUMA位置对比)"
         echo "    绑定方式:   CPU@节点${cross_cpu} + 内存@节点${cross_mem}"
     done
     echo "    运算类型:   Copy / Scale / Add / Triad (stride=${strides})"
@@ -1416,10 +1540,12 @@ automated_memory_test() {
     if [ "$NUMA_NODES" -gt 1 ] && command -v numactl &> /dev/null; then
         for cross_mem in $remote_nodes; do
             inter_size=$(compute_memory_bw_array_size cross "$cross_mem")
+            cross_distance=${remote_distances[$cross_mem]}
+            local access_mode="cross_${cross_cpu}_${cross_mem}_d${cross_distance}"
             for stride in $strides; do
-                echo ">>> 第四步: 跨 NUMA 节点性能测试 (${cross_cpu} -> ${cross_mem}, stride ${stride})"
+                echo ">>> 第四步: 跨 NUMA 节点性能测试 (${cross_cpu} -> ${cross_mem}, 距离=${cross_distance}, stride ${stride})"
                 for run_id in $(seq 1 "$REPEAT_RUNS"); do
-                    if ! run_four_ops_bound "$inter_size" "$inter_threads" "auto_inter_numa${cross_cpu}_to_${cross_mem}" "cross" "$cross_cpu" "$cross_mem" "$stride" "$run_id"; then
+                    if ! run_four_ops_bound "$inter_size" "$inter_threads" "auto_${access_mode}" "$access_mode" "$cross_cpu" "$cross_mem" "$stride" "$run_id"; then
                         failed_tests=$((failed_tests + 1))
                     fi
                 done
@@ -1432,6 +1558,7 @@ automated_memory_test() {
         failed_tests=$((failed_tests + 1))
     fi
     print_memory_performance_report
+    print_representative_access_summary
 
     if [ "$failed_tests" -ne 0 ]; then
         log_error "自动化测试完成，但有 ${failed_tests} 个测试项未通过"
@@ -1625,7 +1752,7 @@ run_intra_numa_test() {
             if [ $? -eq 0 ]; then
                 # Run with NUMA binding
                 export OMP_NUM_THREADS=$threads
-                numactl --all --cpunodebind=$node_id --membind=$node_id ./"$executable" > "$output_file" 2>&1
+                numactl --cpunodebind=$node_id --membind=$node_id ./"$executable" > "$output_file" 2>&1
                 
                 # Process results
                 if [ -f "$output_file" ]; then
@@ -1687,7 +1814,7 @@ run_inter_numa_test() {
                 if [ $? -eq 0 ]; then
                     # Run with NUMA binding
                     export OMP_NUM_THREADS=$threads
-                    numactl --all --membind=$dst_node --cpunodebind=$src_node ./"$executable" > "$output_file" 2>&1
+                    numactl --membind=$dst_node --cpunodebind=$src_node ./"$executable" > "$output_file" 2>&1
                     
                     # Process results
                     if [ -f "$output_file" ]; then
@@ -2021,7 +2148,7 @@ run_numa_tests() {
         
         # Bind both memory and CPU to node 0
         export OMP_NUM_THREADS=$threads
-        numactl --all --membind=0 --cpunodebind=0 ./stream_numa > "$output_file" 2>&1
+        numactl --membind=0 --cpunodebind=0 ./stream_numa > "$output_file" 2>&1
         
         if [ -f "$output_file" ]; then
             local copy=$(grep "Copy:" "$output_file" | awk '{print $2}')
@@ -2066,7 +2193,7 @@ run_numa_tests() {
                 # 2. Run threads on node1 (local node)
                 # This ensures memory access is always cross-NUMA
                 export OMP_NUM_THREADS=$threads
-                numactl --all --membind=$node2 --cpunodebind=$node1 ./stream_numa > "$output_file" 2>&1
+                numactl --membind=$node2 --cpunodebind=$node1 ./stream_numa > "$output_file" 2>&1
                 
                 if [ -f "$output_file" ]; then
                     local copy=$(grep "Copy:" "$output_file" | awk '{print $2}')
@@ -2350,8 +2477,10 @@ legacy_main() {
     done
 }
 
-# Execute main function
-main
+# Execute main function only when the script is run directly
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main
+fi
 
 # Generate comprehensive final report
 generate_final_report() {
@@ -2546,5 +2675,7 @@ calculate_estimated_runtime() {
     echo "scale=1; $total_tests * $time_per_test" | bc
 }
 
-# Execute main function
-main
+# Execute main function only when the script is run directly
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main
+fi
