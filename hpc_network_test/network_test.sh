@@ -684,6 +684,184 @@ analyze_performance() {
     echo -e "${BLUE}----------------------------------------${NC}"
 }
 
+# ====== Clean Summary Functions ======
+get_summary_process_count() {
+    local rel_path="$1"
+    local result_file="$2"
+    local base_name="${rel_path##*/}"
+    base_name="${base_name%.txt}"
+
+    if [[ "$base_name" =~ _([0-9]+)p$ ]]; then
+        echo "${BASH_REMATCH[1]}"
+        return
+    fi
+
+    local procs
+    procs=$(grep -m1 "^# Number of processes:" "$result_file" 2>/dev/null | awk '{print $NF}')
+    if [[ "$procs" =~ ^[0-9]+$ ]]; then
+        echo "$procs"
+    else
+        echo 2
+    fi
+}
+
+derive_summary_test_item() {
+    local rel_path="$1"
+    local dir_name="${rel_path%/*}"
+    local base_name="${rel_path##*/}"
+    base_name="${base_name%.txt}"
+    local test_item
+
+    if [[ "$dir_name" == "$rel_path" ]]; then
+        dir_name=""
+    fi
+
+    case "$dir_name" in
+        p2p)
+            if [[ "$base_name" == *bw* || "$base_name" == *bandwidth* ]]; then
+                test_item="P2P Bandwidth"
+            else
+                test_item="P2P Latency"
+            fi
+            if [[ "$base_name" =~ _([0-9]+)B$ ]]; then
+                test_item+=" (${BASH_REMATCH[1]} B)"
+            elif [[ "$base_name" != *all ]]; then
+                test_item+=" (fixed size)"
+            else
+                test_item+=" (all sizes)"
+            fi
+            ;;
+        collective/*_latency)
+            local collective_type="${dir_name#collective/}"
+            collective_type="${collective_type%_latency}"
+            collective_type="${collective_type^}"
+            local comm_type="Blocking"
+            [[ "$base_name" == *non_blocking* ]] && comm_type="Non-blocking"
+            test_item="Collective $collective_type Latency ($comm_type)"
+            ;;
+        collective/*_bandwidth)
+            local collective_type="${dir_name#collective/}"
+            collective_type="${collective_type%_bandwidth}"
+            collective_type="${collective_type^}"
+            local comm_type="Blocking"
+            [[ "$base_name" == *non_blocking* ]] && comm_type="Non-blocking"
+            test_item="Collective $collective_type Bandwidth ($comm_type)"
+            ;;
+        collective/*)
+            local collective_type="${dir_name#collective/}"
+            collective_type="${collective_type^}"
+            local test_type="Latency"
+            [[ "$base_name" == *bw* || "$base_name" == *bandwidth* ]] && test_type="Bandwidth"
+            local comm_type="Blocking"
+            [[ "$base_name" == *non_blocking* ]] && comm_type="Non-blocking"
+            test_item="Collective $collective_type $test_type ($comm_type)"
+            ;;
+        one-sided)
+            local clean_name="${base_name}"
+            if [[ "$clean_name" =~ _([0-9]+)B$ ]]; then
+                clean_name="${clean_name%_*}"
+                test_item="One-Sided ${clean_name//_/ } (${BASH_REMATCH[1]} B)"
+            else
+                test_item="One-Sided ${clean_name//_/ }"
+            fi
+            ;;
+        nbc/*)
+            local ppn="${dir_name##*/}"
+            ppn="${ppn#ppn}"
+            local test_name="${base_name%_*}"
+            test_item="Non-Blocking ${test_name^} (PPN $ppn)"
+            ;;
+        *)
+            test_item="${rel_path%.txt}"
+            test_item="${test_item//_/ }"
+            ;;
+    esac
+
+    echo "$test_item"
+}
+
+get_summary_metric_names() {
+    local rel_path="$1"
+    local base_name="${rel_path##*/}"
+    local m1="Metric1"
+    local m2="Metric2"
+    local m3="Metric3"
+    local m4="Metric4"
+
+    if [[ "$rel_path" == nbc/* ]]; then
+        m1="Overall_us"; m2="Compute_us"; m3="Pure_Comm_us"; m4="Overlap_pct"
+    elif [[ "$rel_path" == collective/*_bandwidth ]]; then
+        m1="Bandwidth_MB/s"; m2="Min_MB/s"; m3="Max_MB/s"; m4=""
+    elif [[ "$base_name" == *bw* || "$base_name" == *bandwidth* ]]; then
+        m1="Bandwidth_MB/s"
+    elif [[ "$base_name" == *latency* ]]; then
+        m1="Latency_us"
+    fi
+
+    printf "%s %s %s %s" "$m1" "$m2" "$m3" "$m4"
+}
+
+create_clean_summary() {
+    local summary_csv="$RESULT_DIR/summary.csv"
+    local summary_txt="$RESULT_DIR/summary.txt"
+    local result_file rel_path test_item processes metric_names
+    local m1 m2 m3 m4
+
+    echo "TestItem,Processes,Size_Bytes,Metric1,Metric2,Metric3,Metric4,ResultFile" > "$summary_csv"
+    {
+        echo "OSU Benchmark Summary"
+        echo "Generated: $(date)"
+        echo "Test Item                                                                                      Processes    Size(B)  Result"
+        echo "-----------------------------------------------------------------------------------------------  ---------  ---------  -------"
+    } > "$summary_txt"
+
+    local found=0
+    local rows=0
+    while IFS= read -r -d "" result_file; do
+        rel_path="${result_file#"$RESULT_DIR"/}"
+        test_item=$(derive_summary_test_item "$rel_path")
+        processes=$(get_summary_process_count "$rel_path" "$result_file")
+        read -r m1 m2 m3 m4 <<< "$(get_summary_metric_names "$rel_path")"
+        if awk '
+            /^[[:space:]]*[0-9]+([[:space:]]|$)/ { found = 1 }
+            END { exit found ? 0 : 1 }
+        ' "$result_file"; then
+            awk -v item="$test_item" \
+                -v procs="$processes" \
+                -v rel_path="$rel_path" \
+                -v m1="$m1" -v m2="$m2" -v m3="$m3" -v m4="$m4" '
+                /^[[:space:]]*[0-9]+([[:space:]]|$)/ {
+                    size = $1 + 0
+                    values = m1 "=" $2
+                    if (NF >= 3) values = values "; " m2 "=" $3
+                    if (NF >= 4) values = values "; " m3 "=" $4
+                    if (NF >= 5) values = values "; " m4 "=" $5
+                    printf "%s,%s,%d,%s,%s,%s,%s,%s\n", item, procs, size, $2, ($3==""?"":$3), ($4==""?"":$4), ($5==""?"":$5), rel_path
+                    printf "%-95s %9s %10d  %s\n", item, procs, size, values
+                }
+            ' "$result_file" >> "$summary_csv"
+            awk -v item="$test_item" \
+                -v procs="$processes" \
+                -v rel_path="$rel_path" \
+                -v m1="$m1" -v m2="$m2" -v m3="$m3" -v m4="$m4" '
+                /^[[:space:]]*[0-9]+([[:space:]]|$)/ {
+                    values = m1 "=" $2
+                    if (NF >= 3) values = values "; " m2 "=" $3
+                    if (NF >= 4) values = values "; " m3 "=" $4
+                    if (NF >= 5) values = values "; " m4 "=" $5
+                    printf "%-95s %9s %10d  %s\n", item, procs, $1, values
+                }
+            ' "$result_file" >> "$summary_txt"
+            found=1
+        fi
+    done < <(find "$RESULT_DIR" -type f -name "*.txt" \
+             ! -name "summary.txt" ! -name "system_info.txt" -print0 | sort -z)
+
+    if [ "$found" -eq 0 ]; then
+        echo "No numeric test results found." >> "$summary_txt"
+    fi
+}
+
 # ====== Menu and User Interaction Functions ======
 show_main_menu() {
     echo -e "${BLUE}========== HPC Communication Benchmarks ==========${NC}"
@@ -693,7 +871,8 @@ show_main_menu() {
     echo -e "${GREEN}4)${NC} Non-Blocking Collective Tests"
     echo -e "${GREEN}5)${NC} Run All Tests"
     echo -e "${GREEN}6)${NC} Show System Information"
-    echo -e "${GREEN}7)${NC} Exit"
+    echo -e "${GREEN}7)${NC} Generate Clean Summary"
+    echo -e "${GREEN}8)${NC} Exit"
     echo -e "${BLUE}=================================================${NC}"
 }
 
@@ -1593,6 +1772,12 @@ cleanup() {
         } > "$RESULT_DIR/system_info.txt"
     fi
     
+    # Generate a clean summary before archiving
+    create_clean_summary
+    if [ -f "$RESULT_DIR/summary.csv" ]; then
+        log "INFO" "Clean summary generated: $RESULT_DIR/summary.csv"
+    fi
+
     # Compress results if any tests were run
     if [ -d "$RESULT_DIR" ] && [ "$(ls -A $RESULT_DIR)" ]; then
         log "INFO" "Compressing test results..."
@@ -1673,7 +1858,7 @@ EOF
     # Main menu loop
     while true; do
         show_main_menu
-        local choice=$(get_user_choice "Select tests to run (1-7): " 1 7)
+        local choice=$(get_user_choice "Select tests to run (1-8): " 1 8)
         
         case $choice in
             1)
@@ -1707,6 +1892,13 @@ EOF
                 pause
                 ;;
             7)
+                create_clean_summary
+                if [ -f "$RESULT_DIR/summary.txt" ]; then
+                    cat "$RESULT_DIR/summary.txt"
+                fi
+                pause
+                ;;
+            8)
                 log "INFO" "Testing completed"
                 cleanup 0
                 ;;
