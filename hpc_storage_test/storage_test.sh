@@ -28,6 +28,7 @@ DEFAULT_NUM_PROCS="16"
 DEFAULT_OUTPUT_DIR="./ior_results"
 DEFAULT_TEST_FILE="testfile"
 MPIRUN_FLAGS="${MPIRUN_FLAGS:-}"
+IOR_DIRECT="${IOR_DIRECT:-0}"
 PARALLEL_PROCS=(2 4 8 16 32 64 128)
 
 # Thread scaling test configurations
@@ -200,12 +201,18 @@ run_parallel_tests() {
             local output_file="${OUTPUT_DIR}/parallel_scaling_${mode}_${procs}p_${TIMESTAMP}.txt"
             local ior_args
 
+            if [[ "$IOR_DIRECT" == "1" ]]; then
+                ior_args=(--posix.odirect)
+            else
+                ior_args=()
+            fi
+
             if [[ "$mode" == "shared" ]]; then
                 transfer_size="$BLOCK_SIZE"
-                ior_args=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -o "$test_file" -w -r -e)
+                ior_args+=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -o "$test_file" -w -r -e)
             else
                 transfer_size="$TRANSFER_SIZE"
-                ior_args=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -F -o "$test_file" -w -r -e)
+                ior_args+=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -F -o "$test_file" -w -r -e)
             fi
 
             echo -e "\n${BLUE}Running ${mode} test with ${procs} processes${NC}"
