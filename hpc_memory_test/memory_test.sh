@@ -841,7 +841,7 @@ count_cpulist() {
 get_numa_node_ids() {
     local source_ids node_ids=""
 
-    source_ids=$(numactl --all --show 2>/dev/null |
+    source_ids=$(numactl --show 2>/dev/null |
         awk "/^(cpubind|nodebind|membind):/ {for (i=2; i<=NF; i++) if (\$i ~ /^[0-9]+\$/) print \$i}")
     node_ids="$node_ids $source_ids"
 
@@ -859,12 +859,12 @@ get_numa_node_ids() {
 
 is_numa_cpu_node() {
     command -v numactl &> /dev/null &&
-        numactl --all --cpunodebind="$1" true > /dev/null 2>&1
+        numactl --cpunodebind="$1" true > /dev/null 2>&1
 }
 
 is_numa_mem_node() {
     command -v numactl &> /dev/null &&
-        numactl --all --cpunodebind="${2:-$1}" --membind="$1" true > /dev/null 2>&1
+        numactl --cpunodebind="${2:-$1}" --membind="$1" true > /dev/null 2>&1
 }
 
 get_numa_distance() {
@@ -1134,11 +1134,11 @@ run_four_ops_bound() {
     local run_exit=0
     case "$bind_mode" in
         intra)
-            numactl --all --cpunodebind="$cpu_node" --membind="$mem_node" ./"$executable" > "$output_file" 2>&1
+            numactl --cpunodebind="$cpu_node" --membind="$mem_node" ./"$executable" > "$output_file" 2>&1
             run_exit=$?
             ;;
         cross*)
-            numactl --all --cpunodebind="$cpu_node" --membind="$mem_node" ./"$executable" > "$output_file" 2>&1
+            numactl --cpunodebind="$cpu_node" --membind="$mem_node" ./"$executable" > "$output_file" 2>&1
             run_exit=$?
             ;;
         *)
@@ -1159,8 +1159,8 @@ run_four_ops_bound() {
             compile_stream "$retry_size" "$stride" "$retry_exec" || return 1
             used_array_size=$retry_size
             case "$bind_mode" in
-                intra) numactl --all --cpunodebind="$cpu_node" --membind="$mem_node" ./"$retry_exec" > "$output_file" 2>&1 ;;
-                cross*) numactl --all --cpunodebind="$cpu_node" --membind="$mem_node" ./"$retry_exec" > "$output_file" 2>&1 ;;
+                intra) numactl --cpunodebind="$cpu_node" --membind="$mem_node" ./"$retry_exec" > "$output_file" 2>&1 ;;
+                cross*) numactl --cpunodebind="$cpu_node" --membind="$mem_node" ./"$retry_exec" > "$output_file" 2>&1 ;;
                 *) ./"$retry_exec" > "$output_file" 2>&1 ;;
             esac
             rm -f "$retry_exec"
@@ -1752,7 +1752,7 @@ run_intra_numa_test() {
             if [ $? -eq 0 ]; then
                 # Run with NUMA binding
                 export OMP_NUM_THREADS=$threads
-                numactl --all --cpunodebind=$node_id --membind=$node_id ./"$executable" > "$output_file" 2>&1
+                numactl --cpunodebind=$node_id --membind=$node_id ./"$executable" > "$output_file" 2>&1
                 
                 # Process results
                 if [ -f "$output_file" ]; then
@@ -1814,7 +1814,7 @@ run_inter_numa_test() {
                 if [ $? -eq 0 ]; then
                     # Run with NUMA binding
                     export OMP_NUM_THREADS=$threads
-                    numactl --all --membind=$dst_node --cpunodebind=$src_node ./"$executable" > "$output_file" 2>&1
+                    numactl --membind=$dst_node --cpunodebind=$src_node ./"$executable" > "$output_file" 2>&1
                     
                     # Process results
                     if [ -f "$output_file" ]; then
@@ -2148,7 +2148,7 @@ run_numa_tests() {
         
         # Bind both memory and CPU to node 0
         export OMP_NUM_THREADS=$threads
-        numactl --all --membind=0 --cpunodebind=0 ./stream_numa > "$output_file" 2>&1
+        numactl --membind=0 --cpunodebind=0 ./stream_numa > "$output_file" 2>&1
         
         if [ -f "$output_file" ]; then
             local copy=$(grep "Copy:" "$output_file" | awk '{print $2}')
@@ -2193,7 +2193,7 @@ run_numa_tests() {
                 # 2. Run threads on node1 (local node)
                 # This ensures memory access is always cross-NUMA
                 export OMP_NUM_THREADS=$threads
-                numactl --all --membind=$node2 --cpunodebind=$node1 ./stream_numa > "$output_file" 2>&1
+                numactl --membind=$node2 --cpunodebind=$node1 ./stream_numa > "$output_file" 2>&1
                 
                 if [ -f "$output_file" ]; then
                     local copy=$(grep "Copy:" "$output_file" | awk '{print $2}')
