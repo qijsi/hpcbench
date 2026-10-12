@@ -533,6 +533,61 @@ format_data_row() {
     esac
 }
 
+# Detect non-monotonic latency values that may indicate protocol switches.
+detect_latency_anomalies() {
+    local result_file=$1
+    local anomalies
+    local status
+
+    anomalies=$(awk '
+        /^[[:space:]]*[0-9]+([[:space:]]|$)/ {
+            if (NF < 2 || $1 + 0 <= 0 || $2 + 0 <= 0) {
+                printf "Malformed latency row: %s\n", $0
+                found = 1
+                next
+            }
+
+            size = $1 + 0
+            latency = $2 + 0
+
+            if (count > 0) {
+                if (size <= prev_size) {
+                    printf "Unexpected size order: %d follows %d\n", size, prev_size
+                    found = 1
+                }
+
+                if (latency < prev_latency) {
+                    delta_percent = (prev_latency - latency) * 100.0 / prev_latency
+                    label = ""
+                    if ((prev_size == 131072 && size == 262144) || (prev_size == 262144 && size == 524288)) {
+                        label = " (common protocol-switch range)"
+                    }
+                    printf "Non-monotonic latency: %d B=%.3f us -> %d B=%.3f us (%.2f%% lower)%s\n", prev_size, prev_latency, size, latency, delta_percent, label
+                    found = 1
+                }
+            }
+
+            prev_size = size
+            prev_latency = latency
+            count++
+        }
+        END {
+            if (count == 0) {
+                exit 2
+            }
+            exit found ? 0 : 1
+        }
+    ' "$result_file")
+    status=$?
+
+    if [ "$status" -eq 0 ]; then
+        printf "%s\n" "$anomalies"
+    fi
+
+    return "$status"
+}
+
+
 calculate_statistics() {
     local test_type=$1
     local result_file=$2
@@ -591,6 +646,9 @@ analyze_performance() {
     local result_file=$1
     local test_type=$2
     
+    local executable=${3:-unknown}
+    local launch_command=${4:-N/A}
+    local anomaly_status
     # Get test info
     local test_info=$(get_test_info "$test_type" "$result_file")
     
@@ -619,6 +677,26 @@ analyze_performance() {
         echo "$stat"
     done
     
+
+    # Detect protocol-switch-like non-monotonic latency patterns.
+    if [[ "$test_type" == *Latency* ]]; then
+        echo -e "\n${GREEN}Latency Anomaly Check:${NC}"
+        detect_latency_anomalies "$result_file"
+        anomaly_status=$?
+        if [ "$anomaly_status" -eq 0 ]; then
+            log "WARN" "Non-monotonic latency detected for $test_name"
+            log "WARN" "Executable: $executable"
+            log "WARN" "Launch command: $launch_command"
+            log "WARN" "Config: SRUN_MPI_TYPE=${SRUN_MPI_TYPE:-unset}, SLURM_MPI_TYPE=${SLURM_MPI_TYPE:-unset}, UCX_TLS=${UCX_TLS:-unset}, UCX_NET_DEVICES=${UCX_NET_DEVICES:-unset}, TEST_SYSTEM_PARAMS=${TEST_SYSTEM_PARAMS:-unset}"
+            echo -e "${YELLOW}Review the executable/command/config above; rerun the affected size range to rule out application or parameter issues.${NC}"
+        elif [ "$anomaly_status" -eq 1 ]; then
+            echo -e "${GREEN}No non-monotonic latency anomalies detected.${NC}"
+        else
+            echo -e "${RED}No numeric latency rows found; result format is invalid.${NC}"
+            log "ERROR" "No numeric latency rows found in $result_file"
+        fi
+    fi
+
     echo -e "${BLUE}----------------------------------------${NC}"
 }
 
@@ -820,7 +898,7 @@ run_test() {
     case $exit_code in
         0)
             log "SUCCESS" "$test_name completed successfully"
-            analyze_performance "$output_file" "$test_name"
+            analyze_performance "$output_file" "$test_name" "$test_path" "$full_command"
             return 0
             ;;
         124)  # timeout exit code
