@@ -173,6 +173,14 @@ run_serial_tests() {
     echo -e "${GREEN}Serial tests completed!${NC}"
 }
 
+# Function to remove IOR test data for one scaling case
+cleanup_scaling_test_files() {
+    local test_file="$1"
+
+    rm -f -- "${test_file}" "${test_file}".*
+    echo "Cleaned test data: ${test_file}*"
+}
+
 # Function to run parallel tests only
 run_parallel_tests() {
     local csv_file="${OUTPUT_DIR}/parallel_scaling_${TIMESTAMP}.csv"
@@ -194,13 +202,14 @@ run_parallel_tests() {
 
             if [[ "$mode" == "shared" ]]; then
                 transfer_size="$BLOCK_SIZE"
-                ior_args=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -o "$test_file" -w -r)
+                ior_args=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -o "$test_file" -w -r -e)
             else
                 transfer_size="$TRANSFER_SIZE"
-                ior_args=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -F -o "$test_file" -w -r)
+                ior_args=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -F -o "$test_file" -w -r -e)
             fi
 
             echo -e "\n${BLUE}Running ${mode} test with ${procs} processes${NC}"
+            cleanup_scaling_test_files "$test_file"
             if mpirun $MPIRUN_FLAGS -np "$procs" ior "${ior_args[@]}" > "$output_file" 2>&1; then
                 echo -e "${GREEN}Completed ${mode} test with ${procs} processes${NC}"
                 display_test_results "$output_file" "Parallel Scaling ${mode} (${procs} procs)"
@@ -218,6 +227,8 @@ run_parallel_tests() {
                 echo "${mode},${procs},NA,0,0,0,failed,${output_file}" >> "$csv_file"
                 cat "$output_file"
             fi
+
+            cleanup_scaling_test_files "$test_file"
         done
     done
 
