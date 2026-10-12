@@ -11,7 +11,7 @@ ALL_NODES="$NODE1,$NODE2"
 
 # OSU Path and Test Configuration
 #OSU_PATH="/root/osu/libexec/osu-micro-benchmarks/mpi"
-OSU_PATH="/opt/hpc/software/app/osu/7.4"
+OSU_PATH="./OMB/c/mpi"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 RESULT_DIR="osu_results_${TIMESTAMP}"
 
@@ -20,8 +20,8 @@ USE_MODULES=true  # Set to false to disable module loading
 MODULE_PURGE_CMD="module purge"
 MODULE_LOAD_CMDS=(
     "module load compiler/dtk/25.04"
-    #"module load mpi/openmpi/5.0.3/gcc-8.5.0/shca_ucx-1.15.0"
-    "module load mpi/openmpi/openmpi-4.1.5-gcc9.3.0"
+    "module load mpi/openmpi/5.0.3/gcc-8.5.0/shca_ucx-1.15.0"
+    #"module load mpi/openmpi/openmpi-4.1.5-gcc9.3.0"
     #"module load mpi/ucx/1.18.0/dtk-25.04/shca"
 )
 
@@ -35,6 +35,8 @@ MIN_SLURM_NODES=2
 USE_SLURM_LAUNCHER_ACTIVE=false
 MPI_LAUNCH_MODE="mpirun"  # srun | mpirun_slurm | mpirun_ssh
 SLURM_MPI_PARAMS=""
+SRUN_MPI_TYPE="${SRUN_MPI_TYPE:-pmix}"
+export SLURM_MPI_TYPE=pmix
 
 # MPI Configuration
 MCA_PARAMS="--mca btl ^tcp --mca pml ucx --mca osc ucx"
@@ -52,21 +54,6 @@ MESSAGE_SIZES=(1 1024 65536 1048576 4194304 16777216)  # Message sizes in bytes
 TEST_ITERATIONS=1000  # Number of iterations for each test
 WARMUP_ITERATIONS=100  # Number of warmup iterations
 
-# Collective Bandwidth Test Configuration
-COLLECTIVE_BW_MAX_SIZE=16777216  # 16MB max message size for bandwidth tests
-COLLECTIVE_BW_ITERATIONS=1000    # Default iterations for bandwidth tests
-COLLECTIVE_BW_WARMUP=100         # Default warmup iterations for bandwidth tests
-
-# Collective Type Mapping for osu_collective_bandwidth_fixed
-# Based on: 0=Allreduce, 1=Alltoall, 2=Allgather, 3=Broadcast, 4=Reduce, 5=Scatter
-declare -A COLLECTIVE_TYPE_MAP=(
-    ["Allreduce"]=0
-    ["Alltoall"]=1
-    ["Allgather"]=2
-    ["Broadcast"]=3
-    ["Reduce"]=4
-    ["Scatter"]=5
-)
 
 # Color Configuration for Output
 RED='\033[0;31m'
@@ -82,7 +69,6 @@ LOG_FILE="$RESULT_DIR/test.log"
 # Test Timeouts (in seconds)
 P2P_TIMEOUT=300
 COLLECTIVE_TIMEOUT=600
-COLLECTIVE_BW_TIMEOUT=900  # Longer timeout for bandwidth tests
 ONE_SIDED_TIMEOUT=300
 STARTUP_TIMEOUT=60
 
@@ -253,6 +239,21 @@ verify_osu_library_deps() {
         log "ERROR" "Ensure DTK/HIP modules are loaded and passed via mpirun -x LD_LIBRARY_PATH"
         return 1
     fi
+
+    local mpi_dir="" lib_path lib_dir
+    while IFS= read -r lib_path; do
+        [ -n "$lib_path" ] || continue
+        lib_dir=$(dirname "$lib_path")
+        if [ -z "$mpi_dir" ]; then
+            mpi_dir="$lib_dir"
+        elif [ "$lib_dir" != "$mpi_dir" ]; then
+            log "ERROR" "Mixed OpenMPI runtime libraries detected for $test_path:"
+            log "ERROR" "  first: $mpi_dir"
+            log "ERROR" "  next:  $lib_dir"
+            log "ERROR" "Purge modules and load only one OpenMPI module on all nodes"
+            return 1
+        fi
+    done < <(ldd "$test_path" 2>/dev/null | awk '/libmpi\.so|libopen-rte\.so|libopen-pal\.so/ {print $3}')
     return 0
 }
 
@@ -336,11 +337,13 @@ check_node_connectivity() {
 }
 
 get_srun_params() {
-    local total_procs=$1
-    local nnodes=${SLURM_NNODES:-2}
-    local ppr=$((total_procs / nnodes))
-    [ "$ppr" -lt 1 ] && ppr=1
-    echo "-n $total_procs --ntasks-per-node=$ppr --export=ALL"
+    local nprocs=$1
+    local nodes=${SLURM_NNODES:-2}
+    [ "$nodes" -lt 1 ] && nodes=1
+    [ "$nodes" -gt "$nprocs" ] && nodes=$nprocs
+    local ppn=$(( (nprocs + nodes - 1) / nodes ))
+    [ "$ppn" -lt 1 ] && ppn=1
+    echo "--mpi=${SRUN_MPI_TYPE} -N ${nodes} -n ${nprocs} --ntasks-per-node=${ppn} --export=ALL"
 }
 
 build_mpi_launch_command() {
@@ -514,6 +517,61 @@ format_data_row() {
     esac
 }
 
+# Detect non-monotonic latency values that may indicate protocol switches.
+detect_latency_anomalies() {
+    local result_file=$1
+    local anomalies
+    local status
+
+    anomalies=$(awk '
+        /^[[:space:]]*[0-9]+([[:space:]]|$)/ {
+            if (NF < 2 || $1 + 0 <= 0 || $2 + 0 <= 0) {
+                printf "Malformed latency row: %s\n", $0
+                found = 1
+                next
+            }
+
+            size = $1 + 0
+            latency = $2 + 0
+
+            if (count > 0) {
+                if (size <= prev_size) {
+                    printf "Unexpected size order: %d follows %d\n", size, prev_size
+                    found = 1
+                }
+
+                if (latency < prev_latency) {
+                    delta_percent = (prev_latency - latency) * 100.0 / prev_latency
+                    label = ""
+                    if ((prev_size == 131072 && size == 262144) || (prev_size == 262144 && size == 524288)) {
+                        label = " (common protocol-switch range)"
+                    }
+                    printf "Non-monotonic latency: %d B=%.3f us -> %d B=%.3f us (%.2f%% lower)%s\n", prev_size, prev_latency, size, latency, delta_percent, label
+                    found = 1
+                }
+            }
+
+            prev_size = size
+            prev_latency = latency
+            count++
+        }
+        END {
+            if (count == 0) {
+                exit 2
+            }
+            exit found ? 0 : 1
+        }
+    ' "$result_file")
+    status=$?
+
+    if [ "$status" -eq 0 ]; then
+        printf "%s\n" "$anomalies"
+    fi
+
+    return "$status"
+}
+
+
 calculate_statistics() {
     local test_type=$1
     local result_file=$2
@@ -542,7 +600,7 @@ calculate_statistics() {
             stats+=$'\n'"Peak Bandwidth: ${peak_bw:-N/A} MB/s"
             ;;
             
-        *"Bandwidth"*|*"Bi-directional Bandwidth"*|*"Collective Bandwidth"*)
+        *"Bandwidth"*|*"Bi-directional Bandwidth"*)
             local avg_bw=$(awk '/^[0-9]/ {sum+=$2; count++} END {if(count>0) printf "%.2f", sum/count}' "$result_file")
             local peak_bw=$(awk '/^[0-9]/ {if($2>max) max=$2} END {printf "%.2f", max}' "$result_file")
             local min_bw=$(awk '/^[0-9]/ {if(min=="" || $2<min) min=$2} END {printf "%.2f", min}' "$result_file")
@@ -572,6 +630,9 @@ analyze_performance() {
     local result_file=$1
     local test_type=$2
     
+    local executable=${3:-unknown}
+    local launch_command=${4:-N/A}
+    local anomaly_status
     # Get test info
     local test_info=$(get_test_info "$test_type" "$result_file")
     
@@ -600,6 +661,26 @@ analyze_performance() {
         echo "$stat"
     done
     
+
+    # Detect protocol-switch-like non-monotonic latency patterns.
+    if [[ "$test_type" == *Latency* ]]; then
+        echo -e "\n${GREEN}Latency Anomaly Check:${NC}"
+        detect_latency_anomalies "$result_file"
+        anomaly_status=$?
+        if [ "$anomaly_status" -eq 0 ]; then
+            log "WARN" "Non-monotonic latency detected for $test_name"
+            log "WARN" "Executable: $executable"
+            log "WARN" "Launch command: $launch_command"
+            log "WARN" "Config: SRUN_MPI_TYPE=${SRUN_MPI_TYPE:-unset}, SLURM_MPI_TYPE=${SLURM_MPI_TYPE:-unset}, UCX_TLS=${UCX_TLS:-unset}, UCX_NET_DEVICES=${UCX_NET_DEVICES:-unset}, TEST_SYSTEM_PARAMS=${TEST_SYSTEM_PARAMS:-unset}"
+            echo -e "${YELLOW}Review the executable/command/config above; rerun the affected size range to rule out application or parameter issues.${NC}"
+        elif [ "$anomaly_status" -eq 1 ]; then
+            echo -e "${GREEN}No non-monotonic latency anomalies detected.${NC}"
+        else
+            echo -e "${RED}No numeric latency rows found; result format is invalid.${NC}"
+            log "ERROR" "No numeric latency rows found in $result_file"
+        fi
+    fi
+
     echo -e "${BLUE}----------------------------------------${NC}"
 }
 
@@ -801,7 +882,7 @@ run_test() {
     case $exit_code in
         0)
             log "SUCCESS" "$test_name completed successfully"
-            analyze_performance "$output_file" "$test_name"
+            analyze_performance "$output_file" "$test_name" "$test_path" "$full_command"
             return 0
             ;;
         124)  # timeout exit code
@@ -833,7 +914,10 @@ run_collective_latency_test() {
         return 1
     fi
     
-    local base_path="$OSU_PATH/collective"
+    local base_path="$OSU_PATH/collective/blocking"
+    if [ "$is_blocking" = false ]; then
+        base_path="$OSU_PATH/collective/non_blocking"
+    fi
     local output_dir="$RESULT_DIR/collective/${collective_type,,}_latency"
     mkdir -p "$output_dir"
     
@@ -949,7 +1033,10 @@ run_collective_test() {
         return 1
     fi
     
-    local base_path="$OSU_PATH/collective"
+    local base_path="$OSU_PATH/collective/blocking"
+    if [ "$is_blocking" = false ]; then
+        base_path="$OSU_PATH/collective/non_blocking"
+    fi
     local output_dir="$RESULT_DIR/collective/${test_name,,}"
     mkdir -p "$output_dir"
     
@@ -1108,9 +1195,9 @@ run_single_p2p_test() {
     local timeout="$3"
     
     if [ "$test_name" == "Latency" ]; then
-        local executable="$OSU_PATH/pt2pt/osu_latency"
+        local executable="$OSU_PATH/pt2pt/standard/osu_latency"
     elif [ "$test_name" == "Bandwidth" ]; then
-        local executable="$OSU_PATH/pt2pt/osu_bw"
+        local executable="$OSU_PATH/pt2pt/standard/osu_bw"
     fi
 
     # Check if executable exists
@@ -1310,10 +1397,8 @@ run_all_standard_collective_tests() {
             # Run latency test (blocking)
             run_collective_latency_test "$collective_type" $total_procs true
             
-            # Run non-blocking latency test (if supported)
-            if [[ ! $collective_type =~ ^(Gather|Reduce)$ ]]; then
-                run_collective_latency_test "$collective_type" $total_procs false
-            fi
+            # Run non-blocking latency test
+            run_collective_latency_test "$collective_type" $total_procs false
             
             # Run bandwidth test (if supported by osu_collective_bandwidth_fixed)
             if [[ ${COLLECTIVE_TYPE_MAP[$collective_type]+_} ]]; then
@@ -1360,15 +1445,15 @@ run_nbc_tests() {
     log "INFO" "=== NBC Tests with $ppn processes per node ==="
 
     # 非阻塞Allreduce
-    run_test "NBC Allreduce" "$OSU_PATH/collective/osu_iallreduce" $total_procs \
+    run_test "NBC Allreduce" "$OSU_PATH/collective/non_blocking/osu_iallreduce" $total_procs \
         "$nbc_dir/iallreduce.txt" "$(get_host_params 16)" "$COLLECTIVE_TIMEOUT"
 
     # 非阻塞Alltoall
-    run_test "NBC Alltoall" "$OSU_PATH/collective/osu_ialltoall" $total_procs \
+    run_test "NBC Alltoall" "$OSU_PATH/collective/non_blocking/osu_ialltoall" $total_procs \
         "$nbc_dir/ialltoall.txt" "$(get_host_params 16)" "$COLLECTIVE_TIMEOUT"
 
     # 非阻塞Broadcast
-    run_test "NBC Broadcast" "$OSU_PATH/collective/osu_ibcast" $total_procs \
+    run_test "NBC Broadcast" "$OSU_PATH/collective/non_blocking/osu_ibcast" $total_procs \
         "$nbc_dir/ibcast.txt" "$(get_host_params 16)" "$COLLECTIVE_TIMEOUT"
 }
 
@@ -1417,12 +1502,12 @@ verify_environment() {
     
     # Verify specific test executables
     local test_files=(
-        "collective/osu_allreduce"
-        "collective/osu_iallreduce"
-        "collective/osu_bcast"
-        "collective/osu_ibcast"
-        "pt2pt/osu_latency"
-        "pt2pt/osu_bw"
+        "collective/blocking/osu_allreduce"
+        "collective/non_blocking/osu_iallreduce"
+        "collective/blocking/osu_bcast"
+        "collective/non_blocking/osu_ibcast"
+        "pt2pt/standard/osu_latency"
+        "pt2pt/standard/osu_bw"
     )
     
     for test_file in "${test_files[@]}"; do
@@ -1436,8 +1521,8 @@ verify_environment() {
     done
     
     # Check file permissions
-    if [ ! -x "$OSU_PATH/collective/osu_allreduce" ]; then
-        log "ERROR" "Test executable not executable: $OSU_PATH/collective/osu_allreduce"
+    if [ ! -x "$OSU_PATH/collective/blocking/osu_allreduce" ]; then
+        log "ERROR" "Test executable not executable: $OSU_PATH/collective/blocking/osu_allreduce"
         return 1
     fi
     
