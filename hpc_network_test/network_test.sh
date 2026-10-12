@@ -20,7 +20,7 @@ USE_MODULES=true  # Set to false to disable module loading
 MODULE_PURGE_CMD="module purge"
 MODULE_LOAD_CMDS=(
     #"module load compiler/dtk/25.04"
-    "module load mpi/openmpi/5.0.3/gcc-8.5.0/shca_ucx-1.15.0"
+#"module load mpi/openmpi/5.0.3/gcc-8.5.0/shca_ucx-1.15.0"
     "module load mpi/openmpi/openmpi-4.1.5-gcc9.3.0"
     #"module load mpi/ucx/1.18.0/dtk-25.04/shca"
 )
@@ -35,6 +35,8 @@ MIN_SLURM_NODES=2
 USE_SLURM_LAUNCHER_ACTIVE=false
 MPI_LAUNCH_MODE="mpirun"  # srun | mpirun_slurm | mpirun_ssh
 SLURM_MPI_PARAMS=""
+SRUN_MPI_TYPE="${SRUN_MPI_TYPE:-pmix}"
+export SLURM_MPI_TYPE=pmix
 
 # MPI Configuration
 MCA_PARAMS="--mca btl ^tcp --mca pml ucx --mca osc ucx"
@@ -253,6 +255,21 @@ verify_osu_library_deps() {
         log "ERROR" "Ensure DTK/HIP modules are loaded and passed via mpirun -x LD_LIBRARY_PATH"
         return 1
     fi
+
+    local mpi_dir="" lib_path lib_dir
+    while IFS= read -r lib_path; do
+        [ -n "$lib_path" ] || continue
+        lib_dir=$(dirname "$lib_path")
+        if [ -z "$mpi_dir" ]; then
+            mpi_dir="$lib_dir"
+        elif [ "$lib_dir" != "$mpi_dir" ]; then
+            log "ERROR" "Mixed OpenMPI runtime libraries detected for $test_path:"
+            log "ERROR" "  first: $mpi_dir"
+            log "ERROR" "  next:  $lib_dir"
+            log "ERROR" "Purge modules and load only one OpenMPI module on all nodes"
+            return 1
+        fi
+    done < <(ldd "$test_path" 2>/dev/null | awk '/libmpi\.so|libopen-rte\.so|libopen-pal\.so/ {print $3}')
     return 0
 }
 
@@ -336,11 +353,13 @@ check_node_connectivity() {
 }
 
 get_srun_params() {
-    local total_procs=$1
-    local nnodes=${SLURM_NNODES:-2}
-    local ppr=$((total_procs / nnodes))
-    [ "$ppr" -lt 1 ] && ppr=1
-    echo "-n $total_procs --ntasks-per-node=$ppr --export=ALL"
+    local nprocs=$1
+    local nodes=${SLURM_NNODES:-2}
+    [ "$nodes" -lt 1 ] && nodes=1
+    [ "$nodes" -gt "$nprocs" ] && nodes=$nprocs
+    local ppn=$(( (nprocs + nodes - 1) / nodes ))
+    [ "$ppn" -lt 1 ] && ppn=1
+    echo "--mpi=${SRUN_MPI_TYPE} -N ${nodes} -n ${nprocs} --ntasks-per-node=${ppn} --export=ALL"
 }
 
 build_mpi_launch_command() {
