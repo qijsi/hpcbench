@@ -1350,17 +1350,24 @@ automated_memory_test() {
 
         intra_size=$(compute_memory_bw_array_size intra "$cross_cpu")
         intra_threads=$(get_numa_node_cpu_count "$cross_cpu")
-        cross_cpu=0
-        remote_nodes="1"
-        if ! is_numa_cpu_node "$cross_cpu"; then
-            log_error "NUMA CPU 节点不可用: $cross_cpu"
+        inter_threads=$intra_threads
+
+        if [ "$cross_cpu" -eq 0 ] && is_numa_mem_node 1 "$cross_cpu"; then
+            remote_nodes="1"
+        else
+            for node_id in "${numa_node_ids[@]}"; do
+                [ "$node_id" -eq "$cross_cpu" ] && continue
+                if is_numa_mem_node "$node_id" "$cross_cpu"; then
+                    remote_nodes="$node_id"
+                    break
+                fi
+            done
+        fi
+
+        if [ -z "$remote_nodes" ]; then
+            log_error "当前进程可绑定 CPU NUMA 节点 node$cross_cpu，但没有可绑定的远端内存节点"
             return 1
         fi
-        if ! is_numa_mem_node "$remote_nodes" "$cross_cpu"; then
-            log_error "NUMA 远端内存节点不可用: node$cross_cpu -> node$remote_nodes"
-            return 1
-        fi
-        inter_threads=$(get_numa_node_cpu_count "$cross_cpu")
     else
         intra_size=$(compute_memory_bw_array_size global)
         intra_threads=$(get_system_cpu_count)
