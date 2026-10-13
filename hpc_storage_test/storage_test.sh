@@ -25,11 +25,11 @@ DEFAULT_TRANSFER_SIZE="4m"
 DEFAULT_BLOCK_SIZE="64m"
 DEFAULT_SEGMENTS="8"
 DEFAULT_NUM_PROCS="16"
-DEFAULT_OUTPUT_DIR="./ior_results"
+DEFAULT_OUTPUT_DIR="."
 DEFAULT_TEST_FILE="testfile"
 MPIRUN_FLAGS="${MPIRUN_FLAGS:-}"
-IOR_DIRECT="${IOR_DIRECT:-0}"
-PARALLEL_PROCS=(2 4 8 16 32 64 128)
+IOR_API="${IOR_API:-MPIIO}"
+PARALLEL_PROCS=(16 32 64 128)
 
 # Thread scaling test configurations
 MAX_CORES=$(nproc)
@@ -43,8 +43,13 @@ if ! echo $DEFAULT_THREAD_SEQUENCE | grep -w "$MAX_CORES" > /dev/null; then
     DEFAULT_THREAD_SEQUENCE="$DEFAULT_THREAD_SEQUENCE $MAX_CORES"
 fi
 
-# Timestamp for unique results
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+# Prepare a distinct results directory for each test run.
+prepare_output_dir() {
+    local test_type="$1"
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    OUTPUT_DIR="${OUTPUT_BASE_DIR}/${test_type}_${TIMESTAMP}"
+    mkdir -p "${OUTPUT_DIR}"
+}
 
 # Function to display menu
 show_menu() {
@@ -54,7 +59,7 @@ show_menu() {
     echo -e "${GREEN}1)${NC} Custom Test (User-defined parameters)"
     echo -e "${GREEN}2)${NC} Full Benchmark Suite"
     echo -e "${GREEN}3)${NC} Serial Tests Only"
-    echo -e "${GREEN}4)${NC} Parallel Scaling Tests (2-128 procs)"
+    echo -e "${GREEN}4)${NC} Parallel Scaling Tests (16-128 procs)"
     echo -e "${GREEN}5)${NC} Thread Scaling Tests"
     echo -e "${GREEN}6)${NC} Block Size Scaling Test"
     echo -e "${GREEN}7)${NC} View Recent Results"
@@ -69,7 +74,7 @@ confirm_parameters() {
     echo "  Block Size: $BLOCK_SIZE"
     echo "  Segments: $SEGMENTS"
     echo "  Parallel Processes: $NUM_PROCS"
-    echo "  Output Directory: $OUTPUT_DIR"
+    echo "  Results Parent Directory: $OUTPUT_BASE_DIR"
     echo "  Test File Path: $TEST_FILE_PATH"
     echo ""
     read -p "Continue with these parameters? (y/n): " confirm
@@ -125,8 +130,8 @@ run_parallel_shared_write_read() {
     output_file="${OUTPUT_DIR}/${test_name}.txt"
     
     # N:1 shared-file mode requires xfer-size == block-size when segments > 1
-    mpirun -np ${NUM_PROCS} ior -a POSIX -t ${BLOCK_SIZE} -b ${BLOCK_SIZE} \
-        -s ${SEGMENTS} -o ${TEST_FILE_PATH}_parallel_shared_w -w -r > ${output_file} 2>&1
+    mpirun $MPIRUN_FLAGS -np ${NUM_PROCS} ior -a ${IOR_API} -c -t ${BLOCK_SIZE} -b ${BLOCK_SIZE} \
+        -s ${SEGMENTS} -o ${TEST_FILE_PATH}_parallel_shared_w -w -r -e > ${output_file} 2>&1
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}Parallel Shared Write/Read Test Completed${NC}"
@@ -145,8 +150,8 @@ run_parallel_independent_write_read() {
     output_file="${OUTPUT_DIR}/${test_name}.txt"
     
     # Run IOR test and capture all output
-    mpirun -np ${NUM_PROCS} ior -a POSIX -t ${TRANSFER_SIZE} -b ${BLOCK_SIZE} \
-        -s ${SEGMENTS} -F -o ${TEST_FILE_PATH}_parallel_independent_w -w -r > ${output_file} 2>&1
+    mpirun $MPIRUN_FLAGS -np ${NUM_PROCS} ior -a ${IOR_API} -F -t ${TRANSFER_SIZE} -b ${BLOCK_SIZE} \
+        -s ${SEGMENTS} -o ${TEST_FILE_PATH}_parallel_independent_w -w -r -e > ${output_file} 2>&1
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}Parallel Independent Write/Read Test Completed${NC}"
@@ -161,6 +166,7 @@ run_parallel_independent_write_read() {
 # Function to run all tests
 run_all_tests() {
     echo -e "${YELLOW}Starting Full Benchmark Suite${NC}"
+    prepare_output_dir "full_benchmark"
     run_serial_write_read
     run_parallel_shared_write_read
     run_parallel_independent_write_read
@@ -170,6 +176,7 @@ run_all_tests() {
 # Function to run serial tests only
 run_serial_tests() {
     echo -e "${YELLOW}Starting Serial Tests${NC}"
+    prepare_output_dir "serial"
     run_serial_write_read
     echo -e "${GREEN}Serial tests completed!${NC}"
 }
@@ -184,6 +191,7 @@ cleanup_scaling_test_files() {
 
 # Function to run parallel tests only
 run_parallel_tests() {
+    prepare_output_dir "parallel"
     local csv_file="${OUTPUT_DIR}/parallel_scaling_${TIMESTAMP}.csv"
     local procs mode
 
@@ -201,18 +209,14 @@ run_parallel_tests() {
             local output_file="${OUTPUT_DIR}/parallel_scaling_${mode}_${procs}p_${TIMESTAMP}.txt"
             local ior_args
 
-            if [[ "$IOR_DIRECT" == "1" ]]; then
-                ior_args=(--posix.odirect)
-            else
-                ior_args=()
-            fi
+            ior_args=(-a "$IOR_API")
 
             if [[ "$mode" == "shared" ]]; then
                 transfer_size="$BLOCK_SIZE"
-                ior_args+=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -o "$test_file" -w -r -e)
+                ior_args+=(-c -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -o "$test_file" -w -r -e)
             else
                 transfer_size="$TRANSFER_SIZE"
-                ior_args+=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -F -o "$test_file" -w -r -e)
+                ior_args+=(-F -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -o "$test_file" -w -r -e)
             fi
 
             echo -e "\n${BLUE}Running ${mode} test with ${procs} processes${NC}"
@@ -245,6 +249,7 @@ run_parallel_tests() {
 
 # Function to run thread scaling tests with enhanced output
 run_thread_scaling_tests() {
+    prepare_output_dir "thread_scaling"
     echo -e "${YELLOW}Running Thread Scaling Tests${NC}"
     echo "This will test both shared and independent file access patterns"
     echo "with different thread counts: $DEFAULT_THREAD_SEQUENCE"
@@ -339,16 +344,15 @@ run_thread_scaling_tests() {
 
 # Function to display recent results
 view_results() {
-    # Ensure OUTPUT_DIR is set
-    OUTPUT_DIR=${OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}
-    
     echo -e "${BLUE}Recent Test Results:${NC}"
     
-    # Create directory if it doesn't exist
-    mkdir -p "${OUTPUT_DIR}"
-    
-    # Check if there are any result files
-    if [ -d "${OUTPUT_DIR}" ] && ls ${OUTPUT_DIR}/*.txt >/dev/null 2>&1; then
+    # Collect result files from the per-run directories under the selected parent.
+    mapfile -t result_files < <(find "${OUTPUT_BASE_DIR}" -mindepth 2 -maxdepth 2 -type f -name '*.txt' \
+        \( -path "${OUTPUT_BASE_DIR}/serial_*/*.txt" -o -path "${OUTPUT_BASE_DIR}/parallel_*/*.txt" \
+        -o -path "${OUTPUT_BASE_DIR}/thread_scaling_*/*.txt" -o -path "${OUTPUT_BASE_DIR}/full_benchmark_*/*.txt" \) \
+        -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -5 | cut -d' ' -f2-)
+
+    if [ "${#result_files[@]}" -gt 0 ]; then
         # Create a temporary array to store file information
         declare -a files
         declare -a descriptions
@@ -357,21 +361,25 @@ view_results() {
         while IFS= read -r file; do
             # Extract test type from filename
             local basename=$(basename "$file")
+            local result_dir=$(basename "$(dirname "$file")")
             local test_type=""
             local timestamp=""
             
-            if [[ $basename =~ thread_scaling ]]; then
+            if [[ $result_dir == thread_scaling_* ]]; then
                 test_type="Thread Scaling Test"
-                timestamp=$(echo $basename | grep -o '[0-9]\{8\}_[0-9]\{6\}')
-            elif [[ $basename =~ serial ]]; then
+            elif [[ $result_dir == serial_block_scaling_* ]]; then
+                test_type="Serial Block Size Scaling Test"
+            elif [[ $result_dir == serial_* ]]; then
                 test_type="Serial Test"
-                timestamp=$(echo $basename | grep -o '[0-9]\{8\}_[0-9]\{6\}')
-            elif [[ $basename =~ parallel_shared ]]; then
-                test_type="Parallel Shared File Test"
-                timestamp=$(echo $basename | grep -o '[0-9]\{8\}_[0-9]\{6\}')
-            elif [[ $basename =~ parallel_independent ]]; then
-                test_type="Parallel Independent File Test"
-                timestamp=$(echo $basename | grep -o '[0-9]\{8\}_[0-9]\{6\}')
+            elif [[ $result_dir == parallel_* ]]; then
+                test_type="Parallel Test"
+            elif [[ $result_dir == full_benchmark_* ]]; then
+                test_type="Full Benchmark Suite"
+            fi
+
+            timestamp=$(echo "$result_dir" | grep -o '[0-9]\{8\}_[0-9]\{6\}')
+            if [ -z "$timestamp" ]; then
+                timestamp=$(echo "$basename" | grep -o '[0-9]\{8\}_[0-9]\{6\}')
             fi
             
             # Format timestamp for display
@@ -380,7 +388,7 @@ view_results() {
                 descriptions+=("$test_type ($formatted_time)")
                 files+=("$file")
             fi
-        done < <(ls -t ${OUTPUT_DIR}/*.txt 2>/dev/null | head -5)
+        done < <(printf '%s\n' "${result_files[@]}")
         
         # Display menu of results
         echo -e "\nSelect a result to view:"
@@ -423,7 +431,7 @@ view_results() {
             read -p "Press Enter to continue..."
         fi
     else
-        echo "No test results found in ${OUTPUT_DIR}"
+        echo "No test results found in ${OUTPUT_BASE_DIR}"
         read -p "Press Enter to continue..."
     fi
 }
@@ -457,8 +465,8 @@ get_custom_parameters() {
     read -p "Number of Parallel Processes [${DEFAULT_NUM_PROCS}]: " input
     NUM_PROCS=${input:-$DEFAULT_NUM_PROCS}
     
-    read -p "Output Directory [${DEFAULT_OUTPUT_DIR}]: " input
-    OUTPUT_DIR=${input:-$DEFAULT_OUTPUT_DIR}
+    read -p "Results Parent Directory [${DEFAULT_OUTPUT_DIR}]: " input
+    OUTPUT_BASE_DIR=${input:-$DEFAULT_OUTPUT_DIR}
     
     read -p "Test File Path [${DEFAULT_TEST_FILE}]: " input
     TEST_FILE_PATH=${input:-$DEFAULT_TEST_FILE}
@@ -477,7 +485,7 @@ set_recommended_parameters() {
     BLOCK_SIZE=${recommended_block_size}
     SEGMENTS="8"
     NUM_PROCS="${DEFAULT_NUM_PROCS}"
-    OUTPUT_DIR="${DEFAULT_OUTPUT_DIR}"
+    OUTPUT_BASE_DIR="${DEFAULT_OUTPUT_DIR}"
     TEST_FILE_PATH="${DEFAULT_TEST_FILE}"
     
     echo -e "${GREEN}Recommended parameters set based on system configuration${NC}"
@@ -485,6 +493,7 @@ set_recommended_parameters() {
 
 # Function to run block size scaling test
 run_block_size_test() {
+    prepare_output_dir "serial_block_scaling"
     echo -e "${YELLOW}Running Serial Block Size Scaling Test${NC}"
     
     # Use serial test parameters
@@ -492,9 +501,7 @@ run_block_size_test() {
     local SEGMENTS=8
     
     # Create test directory and files
-    local test_name="block_size_test_${TIMESTAMP}"
-    local output_dir="${OUTPUT_DIR}/block_size_test_${TIMESTAMP}"
-    mkdir -p "$output_dir"
+    local output_dir="${OUTPUT_DIR}"
     
     # Create summary files
     local summary_file="${output_dir}/block_size_summary.txt"
@@ -637,9 +644,7 @@ main() {
         echo -e "${YELLOW}Warning: MPI is not installed. Parallel tests will not work${NC}"
     fi
     
-    # Ensure OUTPUT_DIR is set and created at startup
-    OUTPUT_DIR=${DEFAULT_OUTPUT_DIR}
-    mkdir -p "${OUTPUT_DIR}"
+    OUTPUT_BASE_DIR=${DEFAULT_OUTPUT_DIR}
     
     while true; do
         show_menu
