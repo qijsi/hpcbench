@@ -6,7 +6,7 @@ MAX_ITERS="${2:-5000}"
 TOL="${3:-1e-8}"
 read -r -a DIMS <<< "${DLS_DIMS:-128 256 512 1024 2048}"
 RUN_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-RESULT_DIR="dls_${RUN_TIMESTAMP}"
+RESULT_DIR="dls_results_${RUN_TIMESTAMP}"
 LOG_FILE="dls_${RUN_TIMESTAMP}.log"
 
 exec > >(tee -a "$LOG_FILE") 2>&1
