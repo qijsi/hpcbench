@@ -4,10 +4,9 @@
 # Comprehensive OSU Micro-Benchmarks testing script for InfiniBand with Enhanced Collective Testing
 
 # ====== Configuration Parameters ======
-# Node Configuration
-NODE1="e07r4n07"
-NODE2="e07r4n08"
-ALL_NODES="$NODE1,$NODE2"
+# Set NODE1/NODE2 only for manual non-Slurm launches. Slurm mode uses allocated nodes.
+NODE1="${NODE1:-}"
+NODE2="${NODE2:-}"
 
 # OSU Path and Test Configuration
 #OSU_PATH="/root/osu/libexec/osu-micro-benchmarks/mpi"
@@ -30,7 +29,7 @@ HOSTFILE_PATH="hostfile"
 USE_HOSTFILE=true  # Set to false to use --host instead
 
 # Slurm launcher: auto = use Slurm plm when inside a multi-node job (recommended)
-USE_SLURM_LAUNCHER=auto   # auto | yes | no
+USE_SLURM_LAUNCHER="${USE_SLURM_LAUNCHER:-auto}"   # auto | yes | no
 MIN_SLURM_NODES=2
 USE_SLURM_LAUNCHER_ACTIVE=false
 MPI_LAUNCH_MODE="mpirun"  # srun | mpirun_slurm | mpirun_ssh
@@ -1646,6 +1645,11 @@ verify_environment() {
     if ! detect_slurm_launcher; then
         return 1
     fi
+
+    if [ "$USE_SLURM_LAUNCHER_ACTIVE" != true ] && { [ -z "$NODE1" ] || [ -z "$NODE2" ]; }; then
+        log "ERROR" "NODE1 and NODE2 must be set for manual non-Slurm launches. Prefer a 2-node Slurm allocation."
+        return 1
+    fi
     
     # Create hostfile (reference only when using Slurm launcher)
     create_hostfile
@@ -1809,7 +1813,6 @@ EOF
     
     # Log script start
     log "INFO" "Starting Enhanced HPC Communication Performance Benchmark"
-    log "INFO" "Nodes: $NODE1, $NODE2"
     log "INFO" "UCX Parameters: $UCX_PARAMS"
     log "INFO" "HIP Parameters: $HIP_PARAMS"
     log "INFO" "Module Loading: $USE_MODULES"
@@ -1822,6 +1825,8 @@ EOF
         log "ERROR" "Environment verification failed. Please fix the issues and try again."
         cleanup 1
     fi
+
+    log "INFO" "Nodes: $NODE1, $NODE2"
     
     # Save initial system information
     {
