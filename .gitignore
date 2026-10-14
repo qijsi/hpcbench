@@ -1,0 +1,17 @@
+**/*result*/
+hpc_network_test/OMB/
+hpc_memory_test/stream_results*
+# environments / installs
+hpc_dcu_test/bin/
+hpc_dcu_test/lib/
+hpc_dcu_test/miniconda3/
+hpc_dcu_test/rocm_install/
+# results / logs
+*.log
+*.tar.gz
+hpc_storage_test/ior_parallel_*/
+hpc_storage_test/*.csv
+hpc_storage_test/*.info
+hpc_network_test/allreduce_scaling_*/
+hpc_network_test/p2p*/
+hpc_storage_test_backup/

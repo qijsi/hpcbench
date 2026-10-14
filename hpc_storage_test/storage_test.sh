@@ -7,8 +7,8 @@
 #############################################
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IOR_DIR="${SCRIPT_DIR}/ior"
-export PATH="${IOR_DIR}/bin:${PATH}"
+IOR_DIR="${SCRIPT_DIR}/ior/ior-4.0.0/src"
+export PATH="${IOR_DIR}:${PATH}"
 export LD_LIBRARY_PATH="${IOR_DIR}/lib:${LD_LIBRARY_PATH}"
 export PATH=/opt/hpc/software/mpi/ompi/5.0.3/gcc-8.5.0/shca/bin:$PATH
 export LD_LIBRARY_PATH=/opt/hpc/software/mpi/ompi/5.0.3/gcc-8.5.0/shca/lib:$LD_LIBRARY_PATH
@@ -25,11 +25,18 @@ DEFAULT_TRANSFER_SIZE="4m"
 DEFAULT_BLOCK_SIZE="64m"
 DEFAULT_SEGMENTS="8"
 DEFAULT_NUM_PROCS="16"
-DEFAULT_OUTPUT_DIR="./ior_results"
+DEFAULT_OUTPUT_DIR=""
 DEFAULT_TEST_FILE="testfile"
 MPIRUN_FLAGS="${MPIRUN_FLAGS:-}"
+MPI_OVERSUBSCRIBE="${MPI_OVERSUBSCRIBE:-0}"
+MPI_SLOT_FLAGS=()
+if [[ "$MPI_OVERSUBSCRIBE" == "1" ]]; then
+    MPI_SLOT_FLAGS+=(--map-by :OVERSUBSCRIBE)
+fi
 IOR_DIRECT="${IOR_DIRECT:-0}"
-PARALLEL_PROCS=(2 4 8 16 32 64 128)
+IOR_REPETITIONS="${IOR_REPETITIONS:-1}"
+IOR_FSYNC="${IOR_FSYNC:-1}"
+PARALLEL_PROCS=(16 32 64 128)
 
 # Thread scaling test configurations
 MAX_CORES=$(nproc)
@@ -46,6 +53,12 @@ fi
 # Timestamp for unique results
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
+set_result_dir() {
+    local test_type=$1
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    OUTPUT_DIR="./ior_${test_type}_${TIMESTAMP}"
+}
+
 # Function to display menu
 show_menu() {
     echo -e "${BLUE}========================================${NC}"
@@ -54,7 +67,7 @@ show_menu() {
     echo -e "${GREEN}1)${NC} Custom Test (User-defined parameters)"
     echo -e "${GREEN}2)${NC} Full Benchmark Suite"
     echo -e "${GREEN}3)${NC} Serial Tests Only"
-    echo -e "${GREEN}4)${NC} Parallel Scaling Tests (2-128 procs)"
+    echo -e "${GREEN}4)${NC} Parallel Scaling Tests (16-128 procs)"
     echo -e "${GREEN}5)${NC} Thread Scaling Tests"
     echo -e "${GREEN}6)${NC} Block Size Scaling Test"
     echo -e "${GREEN}7)${NC} View Recent Results"
@@ -76,6 +89,7 @@ confirm_parameters() {
     if [[ $confirm != [yY] ]]; then
         return 1
     fi
+    mkdir -p "$OUTPUT_DIR"
     return 0
 }
 
@@ -125,7 +139,7 @@ run_parallel_shared_write_read() {
     output_file="${OUTPUT_DIR}/${test_name}.txt"
     
     # N:1 shared-file mode requires xfer-size == block-size when segments > 1
-    mpirun -np ${NUM_PROCS} ior -a POSIX -t ${BLOCK_SIZE} -b ${BLOCK_SIZE} \
+    mpirun $MPIRUN_FLAGS "${MPI_SLOT_FLAGS[@]}" -np ${NUM_PROCS} ior -a POSIX -t ${BLOCK_SIZE} -b ${BLOCK_SIZE} \
         -s ${SEGMENTS} -o ${TEST_FILE_PATH}_parallel_shared_w -w -r > ${output_file} 2>&1
     
     if [ $? -eq 0 ]; then
@@ -145,7 +159,7 @@ run_parallel_independent_write_read() {
     output_file="${OUTPUT_DIR}/${test_name}.txt"
     
     # Run IOR test and capture all output
-    mpirun -np ${NUM_PROCS} ior -a POSIX -t ${TRANSFER_SIZE} -b ${BLOCK_SIZE} \
+    mpirun $MPIRUN_FLAGS "${MPI_SLOT_FLAGS[@]}" -np ${NUM_PROCS} ior -a POSIX -t ${TRANSFER_SIZE} -b ${BLOCK_SIZE} \
         -s ${SEGMENTS} -F -o ${TEST_FILE_PATH}_parallel_independent_w -w -r > ${output_file} 2>&1
     
     if [ $? -eq 0 ]; then
@@ -185,9 +199,9 @@ cleanup_scaling_test_files() {
 # Function to run parallel tests only
 run_parallel_tests() {
     local csv_file="${OUTPUT_DIR}/parallel_scaling_${TIMESTAMP}.csv"
-    local procs mode
+    local procs mode failed_tests=0
 
-    echo -e "${YELLOW}Starting Parallel Scaling Tests${NC}"
+    echo -e "${YELLOW}Starting one parallel scaling run${NC}"
     echo "Process sequence: ${PARALLEL_PROCS[*]}"
     echo "Each process reads and writes 512 MiB (64 MiB block x 8 segments)."
     echo "CSV summary: $csv_file"
@@ -198,7 +212,6 @@ run_parallel_tests() {
         for mode in shared independent; do
             local transfer_size
             local test_file="${TEST_FILE_PATH}_scaling_${mode}_${procs}p"
-            local output_file="${OUTPUT_DIR}/parallel_scaling_${mode}_${procs}p_${TIMESTAMP}.txt"
             local ior_args
 
             if [[ "$IOR_DIRECT" == "1" ]]; then
@@ -209,38 +222,55 @@ run_parallel_tests() {
 
             if [[ "$mode" == "shared" ]]; then
                 transfer_size="$BLOCK_SIZE"
-                ior_args+=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -o "$test_file" -w -r -e)
+                ior_args+=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -i "$IOR_REPETITIONS" -o "$test_file" -w -r)
             else
                 transfer_size="$TRANSFER_SIZE"
-                ior_args+=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -F -o "$test_file" -w -r -e)
+                ior_args+=(-a POSIX -t "$transfer_size" -b "$BLOCK_SIZE" -s "$SEGMENTS" -i "$IOR_REPETITIONS" -F -o "$test_file" -w -r)
+            fi
+            if [[ "$IOR_FSYNC" == "1" ]]; then
+                ior_args+=(-e)
             fi
 
+            local output_file="${OUTPUT_DIR}/parallel_scaling_${mode}_${procs}p_${TIMESTAMP}.txt"
             echo -e "\n${BLUE}Running ${mode} test with ${procs} processes${NC}"
-            cleanup_scaling_test_files "$test_file"
-            if mpirun $MPIRUN_FLAGS -np "$procs" ior "${ior_args[@]}" > "$output_file" 2>&1; then
+            if [[ "${IOR_PRESERVE_TEST_FILES:-0}" != "1" ]]; then
+                cleanup_scaling_test_files "$test_file"
+            fi
+            if mpirun $MPIRUN_FLAGS "${MPI_SLOT_FLAGS[@]}" -np "$procs" ior "${ior_args[@]}" > "$output_file" 2>&1; then
                 echo -e "${GREEN}Completed ${mode} test with ${procs} processes${NC}"
                 display_test_results "$output_file" "Parallel Scaling ${mode} (${procs} procs)"
 
+                local result_count=0
                 while IFS= read -r line; do
                     local operation bandwidth iops latency
-                    operation=$(printf "%s\n" "$line" | awk "{print \$1}")
-                    bandwidth=$(printf "%s\n" "$line" | awk "{print \$2}")
-                    iops=$(printf "%s\n" "$line" | awk "{print \$3}")
-                    latency=$(printf "%s\n" "$line" | awk "{print \$4}")
+                    operation=$(printf "%s\n" "$line" | awk '{print $1}')
+                    bandwidth=$(printf "%s\n" "$line" | awk '{print $2}')
+                    iops=$(printf "%s\n" "$line" | awk '{print $3}')
+                    latency=$(printf "%s\n" "$line" | awk '{print $4}')
                     echo "${mode},${procs},${operation},${bandwidth},${iops},${latency},ok,${output_file}" >> "$csv_file"
+                    ((result_count += 1))
                 done < <(grep -E "^(write|read) " "$output_file" | head -n 2)
+                if (( result_count != 2 )); then
+                    echo -e "${RED}Missing write/read result rows in ${output_file}${NC}"
+                    echo "${mode},${procs},NA,0,0,0,failed,${output_file}" >> "$csv_file"
+                    ((failed_tests += 1))
+                fi
             else
                 echo -e "${RED}Failed ${mode} test with ${procs} processes${NC}"
                 echo "${mode},${procs},NA,0,0,0,failed,${output_file}" >> "$csv_file"
                 cat "$output_file"
+                ((failed_tests += 1))
             fi
 
-            cleanup_scaling_test_files "$test_file"
+            if [[ "${IOR_PRESERVE_TEST_FILES:-0}" != "1" ]]; then
+                cleanup_scaling_test_files "$test_file"
+            fi
         done
     done
 
-    echo -e "\n${GREEN}Parallel scaling tests completed!${NC}"
+    echo -e "\n${GREEN}Parallel tests completed!${NC}"
     echo "CSV summary: $csv_file"
+    return "$((failed_tests > 0))"
 }
 
 # Function to run thread scaling tests with enhanced output
@@ -275,7 +305,7 @@ run_thread_scaling_tests() {
         local shared_output="${OUTPUT_DIR}/${shared_test_name}.txt"
         
         # N:1 shared-file mode requires xfer-size == block-size when segments > 1
-        mpirun -np $threads ior -a POSIX -t ${BLOCK_SIZE} -b ${BLOCK_SIZE} \
+        mpirun $MPIRUN_FLAGS "${MPI_SLOT_FLAGS[@]}" -np $threads ior -a POSIX -t ${BLOCK_SIZE} -b ${BLOCK_SIZE} \
             -s ${SEGMENTS} -o ${TEST_FILE_PATH}_thread_scaling_shared -w -r > "$shared_output" 2>&1
         
         # Independent file access test
@@ -283,7 +313,7 @@ run_thread_scaling_tests() {
         local indep_test_name="thread_scaling_independent_${threads}_${TIMESTAMP}"
         local indep_output="${OUTPUT_DIR}/${indep_test_name}.txt"
         
-        mpirun -np $threads ior -a POSIX -t ${TRANSFER_SIZE} -b ${BLOCK_SIZE} \
+        mpirun $MPIRUN_FLAGS "${MPI_SLOT_FLAGS[@]}" -np $threads ior -a POSIX -t ${TRANSFER_SIZE} -b ${BLOCK_SIZE} \
             -s ${SEGMENTS} -F -o ${TEST_FILE_PATH}_thread_scaling_independent -w -r > "$indep_output" 2>&1
         
         # Extract and display results
@@ -339,8 +369,15 @@ run_thread_scaling_tests() {
 
 # Function to display recent results
 view_results() {
-    # Ensure OUTPUT_DIR is set
-    OUTPUT_DIR=${OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}
+    if [[ -z "${OUTPUT_DIR:-}" || ! -d "$OUTPUT_DIR" ]]; then
+        OUTPUT_DIR=$(find . -maxdepth 1 -type d -name 'ior_*_*' -printf '%T@ %p\n' \
+            | sort -nr | head -n 1 | cut -d' ' -f2-)
+    fi
+
+    if [[ -z "$OUTPUT_DIR" ]]; then
+        echo -e "${YELLOW}No timestamped result directories found.${NC}"
+        return
+    fi
     
     echo -e "${BLUE}Recent Test Results:${NC}"
     
@@ -457,8 +494,12 @@ get_custom_parameters() {
     read -p "Number of Parallel Processes [${DEFAULT_NUM_PROCS}]: " input
     NUM_PROCS=${input:-$DEFAULT_NUM_PROCS}
     
-    read -p "Output Directory [${DEFAULT_OUTPUT_DIR}]: " input
-    OUTPUT_DIR=${input:-$DEFAULT_OUTPUT_DIR}
+    local custom_type=parallel
+    [[ "$NUM_PROCS" -eq 1 ]] && custom_type=serial
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    local suggested_output_dir="./ior_${custom_type}_${TIMESTAMP}"
+    read -p "Output Directory [${suggested_output_dir}]: " input
+    OUTPUT_DIR=${input:-$suggested_output_dir}
     
     read -p "Test File Path [${DEFAULT_TEST_FILE}]: " input
     TEST_FILE_PATH=${input:-$DEFAULT_TEST_FILE}
@@ -477,7 +518,6 @@ set_recommended_parameters() {
     BLOCK_SIZE=${recommended_block_size}
     SEGMENTS="8"
     NUM_PROCS="${DEFAULT_NUM_PROCS}"
-    OUTPUT_DIR="${DEFAULT_OUTPUT_DIR}"
     TEST_FILE_PATH="${DEFAULT_TEST_FILE}"
     
     echo -e "${GREEN}Recommended parameters set based on system configuration${NC}"
@@ -626,6 +666,33 @@ run_block_size_test() {
 }
 
 # Main function
+run_parallel_once() {
+    if [[ -z "${SLURM_JOB_ID:-}" ]]; then
+        echo -e "${RED}Error: --parallel-once must run inside a Slurm allocation${NC}" >&2
+        return 2
+    fi
+    if ! command -v ior >/dev/null 2>&1; then
+        echo -e "${RED}Error: IOR is not installed${NC}" >&2
+        return 2
+    fi
+    if ! command -v mpirun >/dev/null 2>&1; then
+        echo -e "${RED}Error: mpirun is not installed${NC}" >&2
+        return 2
+    fi
+
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    OUTPUT_DIR="${IOR_OUTPUT_DIR:-./ior_parallel_${TIMESTAMP}}"
+    TRANSFER_SIZE="${IOR_TRANSFER_SIZE:-$DEFAULT_TRANSFER_SIZE}"
+    BLOCK_SIZE="${IOR_BLOCK_SIZE:-$DEFAULT_BLOCK_SIZE}"
+    SEGMENTS="${IOR_SEGMENTS:-$DEFAULT_SEGMENTS}"
+    IOR_REPETITIONS="${IOR_REPETITIONS:-1}"
+    TEST_FILE_PATH="${IOR_TEST_FILE_PATH:-${OUTPUT_DIR}/testfile}"
+    mkdir -p "$OUTPUT_DIR"
+    echo "Slurm job: $SLURM_JOB_ID"
+    echo "Result directory: $OUTPUT_DIR"
+    run_parallel_tests
+}
+
 main() {
     # Check dependencies
     if ! command -v ior &> /dev/null; then
@@ -637,9 +704,7 @@ main() {
         echo -e "${YELLOW}Warning: MPI is not installed. Parallel tests will not work${NC}"
     fi
     
-    # Ensure OUTPUT_DIR is set and created at startup
-    OUTPUT_DIR=${DEFAULT_OUTPUT_DIR}
-    mkdir -p "${OUTPUT_DIR}"
+    OUTPUT_DIR=""
     
     while true; do
         show_menu
@@ -652,28 +717,34 @@ main() {
                 ;;
             2)
                 set_recommended_parameters
+                set_result_dir full
                 confirm_parameters && run_all_tests
                 ;;
             3)
                 if [ -z "$TRANSFER_SIZE" ]; then
                     set_recommended_parameters
                 fi
+                set_result_dir serial
                 confirm_parameters && run_serial_tests
                 ;;
             4)
                 if [ -z "$TRANSFER_SIZE" ]; then
                     set_recommended_parameters
                 fi
+                set_result_dir parallel
                 confirm_parameters && run_parallel_tests
                 ;;
             5)
                 if [ -z "$TRANSFER_SIZE" ]; then
                     set_recommended_parameters
                 fi
+                set_result_dir thread
                 confirm_parameters && run_thread_scaling_tests
                 ;;
             6)
                 # Block size test uses its own parameters, skip confirmation
+                set_result_dir block
+                mkdir -p "$OUTPUT_DIR"
                 run_block_size_test
                 ;;
             7)
@@ -693,5 +764,15 @@ main() {
     done
 }
 
-# Run the main function
-main
+case "${1:-}" in
+    --parallel-once)
+        run_parallel_once
+        ;;
+    --help|-h)
+        echo "Usage: $0 [--parallel-once]"
+        echo "  --parallel-once  Run the parallel scaling matrix once inside Slurm."
+        ;;
+    *)
+        main
+        ;;
+esac
