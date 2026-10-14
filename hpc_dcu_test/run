@@ -1,0 +1,30 @@
+BASEROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+BASEPATH=$(dirname ${BASEROOT})
+
+echo $BASEPATH
+
+export LD_LIBRARY_PATH=${BASEPATH}/lib/:$LD_LIBRARY_PATH
+#time=
+#cd /opt
+#if [ -h rocm ] || [ -d rocm ]; then
+#    time=$(date "+%Y%m%d-%H%M%S")
+#    mv rocm rocm-${time}
+#fi
+#ln -s ${BASEPATH}/rocm_install rocm
+
+source /opt/hygon/env.sh
+cd ${BASEPATH}
+if [ $# -eq 0 ]; then
+   ./bin/hyqual
+elif [ $# -eq 1 ]; then
+   ./bin/hyqual $1
+else
+   echo "input error."
+fi
+
+cd /opt
+rm -f rocm
+if [ -n "$time" ]; then
+   mv rocm-${time} rocm
+fi
