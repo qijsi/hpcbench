@@ -19,7 +19,7 @@ USE_MODULES=true  # Set to false to disable module loading
 MODULE_PURGE_CMD="module purge"
 MODULE_LOAD_CMDS=(
     "module load compiler/dtk/25.04"
-    "module load mpi/openmpi/5.0.3/gcc-8.5.0/shca_ucx-1.15.0"
+    "module load mpi/openmpi/5.0.3/gcc-8.5.0/shca"
     #"module load mpi/openmpi/openmpi-4.1.5-gcc9.3.0"
     #"module load mpi/ucx/1.18.0/dtk-25.04/shca"
 )
